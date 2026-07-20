@@ -150,6 +150,21 @@
   .styleTitle { font-size: 8px; color: var(--text-dim); margin: 18px 0 8px; }
   #styleRow { display: flex; gap: 6px; flex-wrap: wrap; }
 
+  /* aim-assist toggles (shared style: setup row + in-game switcher) */
+  #aimRow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .aimTgl {
+    font-family: var(--px); font-size: 8px; padding: 7px 9px;
+    border: 3px solid var(--panel-border); background: #000;
+    color: var(--text-dim); cursor: pointer;
+  }
+  .aimTgl.on { border-color: #2ecc71; color: #2ecc71; }
+  #aimSwitch {
+    position: absolute; bottom: 62px; right: 12px; z-index: 11;
+    display: flex; align-items: center; gap: 6px;
+    background: var(--panel); border: 3px solid var(--panel-border); padding: 8px 10px;
+  }
+  #aimSwitch .aimTgl { font-size: 7px; padding: 6px 7px; }
+
   #endPanel { text-align: center; }
   #endTitle { font-size: 22px; line-height: 1.5; margin-bottom: 14px; color: var(--accent); text-shadow: 3px 3px 0 #000; }
   #endReason { color: var(--text-dim); font-size: 9px; line-height: 1.9; margin-bottom: 6px; }
@@ -188,6 +203,8 @@
   <button id="styleNext">&#9654;</button>
 </div>
 
+<div id="aimSwitch" class="hidden"><span>AIM</span></div>
+
 <div id="setupOverlay" class="overlay">
   <div class="panel">
     <h1>&#127921; PIXEL POOL</h1>
@@ -195,6 +212,8 @@
     <div id="playersRow"></div>
     <div class="styleTitle">TABLE STYLE</div>
     <div id="styleRow"></div>
+    <div class="styleTitle">AIM ASSIST</div>
+    <div id="aimRow"></div>
     <button class="bigBtn" id="startBtn">RACK 'EM UP</button>
   </div>
 </div>
@@ -210,6 +229,7 @@
 
 <script src="lib/three.min.js"></script>
 <script src="js/game.js"></script>
+<script src="js/aimassist.js"></script>
 <script src="js/keyboard.js"></script>
 </body>
 </html>

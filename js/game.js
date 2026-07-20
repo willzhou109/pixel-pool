@@ -319,6 +319,7 @@ const TABLE_STYLES = [
 
 let tableGroup = null;
 let currentTableStyle = 0;
+let pocketMats = []; // one material per pocket, so the aim-assist can glow them
 
 function disposeGroup(g) {
   g.traverse(o => {
@@ -388,16 +389,19 @@ function buildTable(C) {
     r.position.set(xs * frameX, TABLE_Y + 0.005, 0); r.castShadow = r.receiveShadow = true; table.add(r);
   }
 
-  // pockets (flush dark mouths + recess; polygonOffset avoids z-fighting)
-  const pocketMat = new THREE.MeshStandardMaterial({
-    color: '#0a0a0f', flatShading: true, roughness: 0.95, metalness: 0.0,
-    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
-  });
+  // pockets (flush dark mouths + recess; polygonOffset avoids z-fighting).
+  // Each pocket gets its own material so the aim-assist can glow it green.
+  pocketMats = [];
   for (const p of POCKETS) {
-    const mouth = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.12, 18), pocketMat);
+    const pm = new THREE.MeshStandardMaterial({
+      color: '#0a0a0f', emissive: '#000000', flatShading: true, roughness: 0.95, metalness: 0.0,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    pocketMats.push(pm);
+    const mouth = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.12, 18), pm);
     mouth.rotation.x = -Math.PI / 2; mouth.position.set(p.x, TABLE_Y + 0.0015, p.z);
     mouth.receiveShadow = true; table.add(mouth);
-    const cup = new THREE.Mesh(new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12), pocketMat);
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12), pm);
     cup.position.set(p.x, TABLE_Y - 0.045, p.z); table.add(cup);
   }
 
@@ -423,6 +427,8 @@ function setTableStyle(i) {
   if (tableGroup) { scene.remove(tableGroup); disposeGroup(tableGroup); }
   tableGroup = buildTable(TABLE_STYLES[currentTableStyle]);
   scene.add(tableGroup);
+  // pocket materials were just rebuilt fresh (dark); drop any stale glow state
+  if (window.AimAssist) window.AimAssist.clear();
 }
 
 setTableStyle(0);
@@ -472,6 +478,20 @@ for (let id = 0; id <= 15; id++) {
   balls.push({ id, mesh: m, x: 0, z: 0, vx: 0, vz: 0, potted: false, sink: 0 });
 }
 const cue = balls[0];
+
+/* Data + controls the aim-assist module (js/aimassist.js) needs. Kept as a
+   small explicit surface so that feature can live in its own file. */
+window.PoolAimHooks = {
+  scene, POCKETS, R, BALL_Y, TABLE_Y, balls,
+  // Turn a pocket's black void green (and glowing) or back to normal. Reads the
+  // live pocketMats so it keeps working after a table-style rebuild.
+  setPocketGlow(i, on) {
+    const m = pocketMats[i];
+    if (!m) return;
+    if (on) { m.color.set('#2ecc71'); m.emissive.set('#1f8f4d'); m.emissiveIntensity = 1; }
+    else { m.color.set('#0a0a0f'); m.emissive.set('#000000'); }
+  },
+};
 
 function rackBalls() {
   for (const b of balls) {
@@ -753,34 +773,49 @@ function castAim(px, pz, dx, dz) {
 
 function updateAimVisuals() {
   const aiming = (state === S.AIM || state === S.CHARGE) && !cue.potted;
-  guideLine.visible = objLine.visible = ghostRing.visible = aiming;
+  const AA = window.AimAssist;
+  // "Lines" assist toggles the guide/object/ghost visuals; the cue stick and
+  // pocket-preview are independent of it.
+  const linesOn = aiming && (!AA || AA.showLines());
   stick.visible = aiming || striking;
-  if (!aiming) return; // while striking, fire()'s animation drives the stick
+  if (!aiming) { // while striking, fire()'s animation drives the stick
+    guideLine.visible = objLine.visible = ghostRing.visible = false;
+    if (AA) AA.clear();
+    return;
+  }
 
   const d = aimDir();
   const hit = castAim(cue.x, cue.z, d.x, d.y);
   const t = Math.min(hit.t, 6);
   const gx = cue.x + d.x * t, gz = cue.z + d.y * t;
 
-  guideLine.geometry.setFromPoints([
-    new THREE.Vector3(cue.x, BALL_Y, cue.z),
-    new THREE.Vector3(gx, BALL_Y, gz),
-  ]);
-  guideLine.computeLineDistances();
-  ghostRing.position.set(gx, TABLE_Y + 0.002, gz);
-
-  if (hit.ball) {
-    let ox = hit.ball.x - gx, oz = hit.ball.z - gz;
-    const ol = Math.hypot(ox, oz) || 1;
-    ox /= ol; oz /= ol;
-    objLine.geometry.setFromPoints([
-      new THREE.Vector3(hit.ball.x, BALL_Y, hit.ball.z),
-      new THREE.Vector3(hit.ball.x + ox * 0.28, BALL_Y, hit.ball.z + oz * 0.28),
+  guideLine.visible = ghostRing.visible = linesOn;
+  if (linesOn) {
+    guideLine.geometry.setFromPoints([
+      new THREE.Vector3(cue.x, BALL_Y, cue.z),
+      new THREE.Vector3(gx, BALL_Y, gz),
     ]);
-    objLine.visible = true;
+    guideLine.computeLineDistances();
+    ghostRing.position.set(gx, TABLE_Y + 0.002, gz);
+
+    if (hit.ball) {
+      let ox = hit.ball.x - gx, oz = hit.ball.z - gz;
+      const ol = Math.hypot(ox, oz) || 1;
+      ox /= ol; oz /= ol;
+      objLine.geometry.setFromPoints([
+        new THREE.Vector3(hit.ball.x, BALL_Y, hit.ball.z),
+        new THREE.Vector3(hit.ball.x + ox * 0.28, BALL_Y, hit.ball.z + oz * 0.28),
+      ]);
+      objLine.visible = true;
+    } else {
+      objLine.visible = false;
+    }
   } else {
     objLine.visible = false;
   }
+
+  // pocket preview: green when the struck ball is lined up to drop
+  if (AA) AA.updateAim(hit, gx, gz);
 
   // stick: behind the ball, opposite aim dir, slightly elevated, pulled by charge
   const pull = state === S.CHARGE ? chargePull : 0;
@@ -905,6 +940,7 @@ function startMatch() {
   document.getElementById('help').classList.remove('hidden');
   const sw = document.getElementById('styleSwitch');
   sw.classList.remove('hidden');
+  document.getElementById('aimSwitch').classList.remove('hidden');
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
   toast(`${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
   updateHUD();
@@ -1016,6 +1052,7 @@ document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('styleSwitch').classList.add('hidden');
+  document.getElementById('aimSwitch').classList.add('hidden');
   buildSetupUI();
   document.getElementById('setupOverlay').classList.remove('hidden');
   state = S.SETUP;
