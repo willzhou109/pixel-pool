@@ -938,9 +938,7 @@ function startMatch() {
   cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95; // first-person: low, just behind the cue ball
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
-  const sw = document.getElementById('styleSwitch');
-  sw.classList.remove('hidden');
-  document.getElementById('aimSwitch').classList.remove('hidden');
+  if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
   toast(`${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
   updateHUD();
@@ -1051,8 +1049,7 @@ document.getElementById('rematchBtn').addEventListener('click', () => {
 document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
-  document.getElementById('styleSwitch').classList.add('hidden');
-  document.getElementById('aimSwitch').classList.add('hidden');
+  if (window.SettingsPanel) window.SettingsPanel.hide();
   buildSetupUI();
   document.getElementById('setupOverlay').classList.remove('hidden');
   state = S.SETUP;

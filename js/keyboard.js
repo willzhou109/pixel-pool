@@ -14,9 +14,14 @@
   const C = window.PoolControls;
   if (!C) { console.warn('PoolControls API not found — keyboard disabled'); return; }
 
-  const ORBIT_SPEED = 1.7;   // radians / second
-  const ZOOM_RATE   = 1.9;   // exponential zoom factor per second
-  const POWER_RATE  = 0.85;  // fraction of full power gained per second while charging
+  const ORBIT_SPEED = 1.7;   // radians / second (at 100% sensitivity)
+  const ZOOM_RATE   = 1.9;   // exponential zoom factor per second (at 100%)
+  const POWER_RATE  = 0.85;  // fraction of full power gained per second while charging (at 100%)
+
+  // Player-tunable multiplier on every keyboard action (see sensitivity.js).
+  function sens() {
+    return window.KeyboardSensitivity ? window.KeyboardSensitivity.value() : 1;
+  }
 
   const keys = new Set();    // currently-held keys (lower-cased e.key)
   let spaceHeld = false;
@@ -76,21 +81,25 @@
     last = now;
     if (!C.inPlay()) return;
 
+    const s = sens();
+
     // Aim/orbit the camera — locked while charging so the aim can't drift.
     if (!C.isCharging()) {
+      const orbit = ORBIT_SPEED * s * dt;
       let dyaw = 0, dpitch = 0;
-      if (keys.has('arrowleft')  || keys.has('a')) dyaw += ORBIT_SPEED * dt;
-      if (keys.has('arrowright') || keys.has('d')) dyaw -= ORBIT_SPEED * dt;
-      if (keys.has('arrowup')    || keys.has('w')) dpitch += ORBIT_SPEED * dt;
-      if (keys.has('arrowdown')  || keys.has('s')) dpitch -= ORBIT_SPEED * dt;
+      if (keys.has('arrowleft')  || keys.has('a')) dyaw += orbit;
+      if (keys.has('arrowright') || keys.has('d')) dyaw -= orbit;
+      if (keys.has('arrowup')    || keys.has('w')) dpitch += orbit;
+      if (keys.has('arrowdown')  || keys.has('s')) dpitch -= orbit;
       if (dyaw || dpitch) C.orbit(dyaw, dpitch);
 
-      if (keys.has('q')) C.zoom(Math.exp(-ZOOM_RATE * dt)); // zoom in
-      if (keys.has('e')) C.zoom(Math.exp(ZOOM_RATE * dt));  // zoom out
+      const zoom = ZOOM_RATE * s * dt;
+      if (keys.has('q')) C.zoom(Math.exp(-zoom)); // zoom in
+      if (keys.has('e')) C.zoom(Math.exp(zoom));  // zoom out
     }
 
     // Build power while SPACE is held during a charge.
-    if (spaceHeld && C.isCharging()) C.adjustPower(POWER_RATE * dt);
+    if (spaceHeld && C.isCharging()) C.adjustPower(POWER_RATE * s * dt);
   }
   requestAnimationFrame(loop);
 })();
