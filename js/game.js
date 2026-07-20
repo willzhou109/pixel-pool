@@ -831,10 +831,6 @@ document.getElementById('changeBtn').addEventListener('click', () => {
   cam.radius = 3.2; cam.pitch = 0.5;
 });
 
-window.addEventListener('keydown', e => {
-  if (e.key === 'h' || e.key === 'H') document.getElementById('help').classList.toggle('hidden');
-});
-
 /* ================================= INPUT ================================ */
 
 const ptr = { down: false, mode: null, x: 0, y: 0, id: null, moved: 0 };
@@ -946,6 +942,46 @@ canvas.addEventListener('wheel', e => {
   e.preventDefault();
   cam.radius *= Math.exp(e.deltaY * 0.0012);
 }, { passive: false });
+
+/* Control surface exposed to the keyboard module (js/keyboard.js). Everything
+   the keyboard needs to drive the game goes through here so input handling can
+   live in its own file rather than being wired directly into this closure. */
+window.PoolControls = {
+  inPlay()     { return state !== S.SETUP && state !== S.END; },
+  canAim()     { return state === S.AIM && !cue.potted; },
+  isCharging() { return state === S.CHARGE; },
+
+  orbit(dyaw, dpitch) { cam.yaw += dyaw; cam.pitch += dpitch; },
+  zoom(factor)        { cam.radius *= factor; },
+
+  startCharge() {
+    if (state !== S.AIM || cue.potted) return;
+    state = S.CHARGE; chargePull = 0;
+    canvas.classList.add('charging');
+    powerWrap.classList.add('show');
+  },
+  adjustPower(delta) {
+    if (state !== S.CHARGE) return;
+    chargePull = Math.max(0, Math.min(MAX_PULL, chargePull + delta * MAX_PULL));
+    powerFill.style.width = (chargePull / MAX_PULL * 100).toFixed(1) + '%';
+  },
+  power() { return chargePull / MAX_PULL; },
+  shoot() {
+    if (state !== S.CHARGE) return;
+    canvas.classList.remove('charging');
+    powerWrap.classList.remove('show');
+    const p = chargePull / MAX_PULL;
+    if (p > 0.04) fire(p);
+    else { chargePull = 0; state = S.AIM; }
+  },
+  cancelCharge() {
+    if (state !== S.CHARGE) return;
+    canvas.classList.remove('charging');
+    powerWrap.classList.remove('show');
+    chargePull = 0; state = S.AIM;
+  },
+  toggleHelp() { document.getElementById('help').classList.toggle('hidden'); },
+};
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 

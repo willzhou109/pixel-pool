@@ -130,6 +130,7 @@
     padding: 10px 12px; font-size: 7px; color: var(--text-dim); line-height: 2.2; pointer-events: none;
   }
   #help b { color: var(--accent); }
+  #help .helpHead { color: var(--text); font-size: 8px; letter-spacing: 1px; }
 
   #endPanel { text-align: center; }
   #endTitle { font-size: 22px; line-height: 1.5; margin-bottom: 14px; color: var(--accent); text-shadow: 3px 3px 0 #000; }
@@ -150,10 +151,16 @@
 <div id="powerWrap"><div id="powerLabel">POWER</div><div id="powerBar"><div id="powerFill"></div></div></div>
 
 <div id="help" class="hidden">
+  <span class="helpHead">MOUSE</span><br>
   <b>DRAG</b> orbit camera<br>
   <b>SCROLL / PINCH</b> zoom<br>
   <b>DRAG BACK FROM CUE BALL</b> pull &amp; release to shoot<br>
-  <b>H</b> hide help
+  <br>
+  <span class="helpHead">KEYBOARD</span><br>
+  <b>ARROWS / WASD</b> orbit camera<br>
+  <b>Q / E</b> zoom in / out<br>
+  <b>HOLD SPACE</b> build power, release to shoot<br>
+  <b>ESC</b> cancel shot &nbsp; <b>H</b> hide help
 </div>
 
 <div id="setupOverlay" class="overlay">
@@ -176,5 +183,6 @@
 
 <script src="lib/three.min.js"></script>
 <script src="js/game.js"></script>
+<script src="js/keyboard.js"></script>
 </body>
 </html>
