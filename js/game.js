@@ -228,19 +228,27 @@ const WOOD_DARK = '#462c1a';
     table.add(r);
   }
 
-  // pocket cups
+  // Pockets: a flat dark "mouth" that reads as an opening flush with the cloth,
+  // plus a shallow recess below for depth. The mouth uses polygonOffset so it
+  // always wins the depth test against the coplanar felt (no z-fighting), which
+  // is what caused the green/brown flicker when the rim sat level with the felt.
+  const pocketMat = new THREE.MeshStandardMaterial({
+    color: '#0a0a0f', flatShading: true, roughness: 0.95, metalness: 0.0,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  });
   for (const p of POCKETS) {
+    const mouth = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.12, 18), pocketMat);
+    mouth.rotation.x = -Math.PI / 2;
+    mouth.position.set(p.x, TABLE_Y + 0.0015, p.z); // flush decal on the felt
+    mouth.receiveShadow = true;
+    table.add(mouth);
+    // recess below (top kept just under the felt so it never coplanar-fights)
     const cup = new THREE.Mesh(
-      new THREE.CylinderGeometry(p.r * 1.12, p.r * 0.9, 0.09, 10),
-      mat('#101017')
+      new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12),
+      pocketMat
     );
-    cup.position.set(p.x, TABLE_Y - 0.028, p.z);
+    cup.position.set(p.x, TABLE_Y - 0.045, p.z);
     table.add(cup);
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(p.r * 1.06, 0.014, 6, 10), mat(WOOD_DARK));
-    rim.rotation.x = Math.PI / 2;
-    rim.position.set(p.x, TABLE_Y + 0.020, p.z);
-    rim.castShadow = true;
-    table.add(rim);
   }
 
   // apron + legs
