@@ -118,35 +118,11 @@ function shuffle(a) {
 
 /* ================================= ROOM ================================= */
 
-{
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(30, 30),
-    mat('#232836', { roughness: 1 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  scene.add(floor);
-
-  // low-poly rug under the table
-  const rug = new THREE.Mesh(new THREE.CircleGeometry(2.6, 10), mat('#57324a', { roughness: 1 }));
-  rug.rotation.x = -Math.PI / 2;
-  rug.position.y = 0.005;
-  rug.receiveShadow = true;
-  scene.add(rug);
-
-  // hanging lamp (decor)
-  const lampGrp = new THREE.Group();
-  const cord = box(0.015, 1.6, 0.015, '#0d0f14');
-  cord.position.y = 2.8;
-  cord.castShadow = false; // thin cord otherwise streaks a line across the felt
-  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.3, 8, 1, true), mat('#1e5c46', { side: THREE.DoubleSide }));
-  shade.position.y = 2.0;
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6),
-    new THREE.MeshBasicMaterial({ color: '#fff2c0' }));
-  bulb.position.y = 1.92;
-  lampGrp.add(cord, shade, bulb);
-  scene.add(lampGrp);
-}
+// The environment surrounding the table (floor, walls, scenery) is a selectable
+// "background" owned by js/backgrounds.js — it swaps this out live. Backgrounds
+// are pure decoration: their meshes never cast shadows and add no lights, so the
+// pool table's own lighting and shadows stay identical whichever scene is
+// chosen. game.js exposes window.PoolScene (below) for that module to hook into.
 
 /* ================================= TABLE ================================ */
 
@@ -272,9 +248,13 @@ function baseIndustrial(table, C) {
   }
   const beam = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW - 0.3), 0.06, 0.06), m);
   beam.position.set(0, H * 0.55, 0); beam.castShadow = true; table.add(beam);
-  const gear = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.04, 8), m);
-  gear.rotation.x = Math.PI / 2; gear.position.set(PW - 0.3, H * 0.55, zw + 0.02);
-  gear.castShadow = true; table.add(gear);
+  // Vertical posts tie the central beam up to each A-frame apex, so it reads as
+  // connected structure instead of floating between the splayed legs.
+  for (const xs of [-1, 1]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.055, H - H * 0.55, 0.055), m);
+    post.position.set(xs * (PW - 0.3), (H + H * 0.55) / 2, 0);
+    post.castShadow = true; table.add(post);
+  }
 }
 
 // Outdoor: four straight square aluminium posts with leveling feet.
@@ -491,6 +471,17 @@ window.PoolAimHooks = {
     if (on) { m.color.set('#2ecc71'); m.emissive.set('#1f8f4d'); m.emissiveIntensity = 1; }
     else { m.color.set('#0a0a0f'); m.emissive.set('#000000'); }
   },
+};
+
+// Hook for js/backgrounds.js: enough of the scene to hang decoration off of and
+// tint the sky/fog. Deliberately exposes no lights — backgrounds must not touch
+// the lighting rig, so the table's shading is identical in every environment.
+window.PoolScene = {
+  scene, TABLE_Y, PW, PH,
+  setSky(color) { scene.background = new THREE.Color(color); },
+  setFog(color, near, far) { scene.fog = new THREE.Fog(color, near, far); },
+  clearFog() { scene.fog = null; },
+  toast(text) { toast(text); },
 };
 
 function rackBalls() {
