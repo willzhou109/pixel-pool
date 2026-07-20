@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Pixel Pool</title>
+<style>
+  @font-face {
+    font-family: 'Press Start 2P';
+    font-style: normal; font-weight: 400; font-display: block;
+    src: url(lib/fonts/press-start-2p.woff2) format('woff2');
+  }
+  :root {
+    --panel: rgba(16, 20, 30, 0.94);
+    --panel-border: #3a4358;
+    --accent: #f1c40f;
+    --text: #e8ecf2;
+    --text-dim: #96a0b0;
+    --px: 'Press Start 2P', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #10141e; }
+  body {
+    font-family: var(--px); color: var(--text);
+    font-size: 13px; line-height: 1.7;
+    -webkit-font-smoothing: none; image-rendering: pixelated;
+  }
+  #c {
+    display: block; width: 100%; height: 100%; touch-action: none; cursor: grab;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
+  #c.charging { cursor: ns-resize; }
+  #c.placing { cursor: crosshair; }
+
+  .overlay {
+    position: absolute; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    background: rgba(8, 10, 16, 0.55); z-index: 20;
+  }
+  .hidden { display: none !important; }
+
+  .panel {
+    background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 22px 26px; max-width: 720px; width: calc(100% - 32px);
+    max-height: calc(100% - 32px); overflow-y: auto;
+    box-shadow: 8px 8px 0 rgba(0,0,0,0.5);
+    image-rendering: pixelated;
+  }
+  .panel h1 { font-size: 20px; line-height: 1.5; color: var(--accent); margin-bottom: 10px; text-shadow: 3px 3px 0 #000; }
+  .panel .sub { color: var(--text-dim); font-size: 9px; line-height: 1.9; margin-bottom: 18px; }
+
+  #playersRow { display: flex; gap: 16px; flex-wrap: wrap; }
+  .playerCard {
+    flex: 1 1 280px; background: rgba(0,0,0,0.28);
+    border: 3px solid var(--panel-border); padding: 14px;
+  }
+  .playerCard h2 { font-size: 11px; color: var(--accent); margin-bottom: 12px; }
+  .playerCard label { display: block; font-size: 8px; color: var(--text-dim); margin: 14px 0 7px; }
+  .playerCard input[type=text] {
+    width: 100%; padding: 9px 10px; border: 3px solid var(--panel-border);
+    background: #000; color: var(--text); font-family: var(--px); font-size: 10px; outline: none;
+  }
+  .playerCard input[type=text]:focus { border-color: var(--accent); }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatch {
+    width: 26px; height: 26px; border: 3px solid #000;
+    cursor: pointer; padding: 0; image-rendering: pixelated;
+  }
+  .swatch.sel { border-color: var(--accent); box-shadow: 0 0 0 2px #fff; }
+  .hatBtn {
+    padding: 7px 9px; border: 3px solid var(--panel-border);
+    background: #000; color: var(--text); font-family: var(--px); font-size: 8px; cursor: pointer;
+  }
+  .hatBtn.sel { border-color: var(--accent); color: var(--accent); }
+
+  .bigBtn {
+    display: block; margin: 20px auto 0; padding: 14px 30px;
+    font-family: var(--px); font-size: 13px;
+    color: #10141e; background: var(--accent); border: none;
+    box-shadow: 5px 5px 0 #8a6d00; cursor: pointer;
+  }
+  .bigBtn:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 #8a6d00; }
+  .bigBtn.ghostBtn {
+    background: transparent; color: var(--text-dim);
+    border: 3px solid var(--panel-border); box-shadow: 5px 5px 0 rgba(0,0,0,0.4);
+    font-size: 10px; margin-top: 12px;
+  }
+
+  /* HUD */
+  #hud {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; align-items: stretch; z-index: 10; pointer-events: none;
+  }
+  .hudCard {
+    background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 9px 14px; min-width: 150px; text-align: center; opacity: 0.6;
+    transition: opacity 0.25s;
+  }
+  .hudCard.active { opacity: 1; border-color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+  .hudCard .pname { font-size: 10px; }
+  .hudCard .pgroup { font-size: 7px; color: var(--text-dim); margin-top: 6px; }
+  .hudCard .dots { display: flex; gap: 3px; justify-content: center; margin-top: 7px; min-height: 8px; flex-wrap: wrap; }
+  .hudCard .dot { width: 8px; height: 8px; }
+  .hudCard .dot.striped { background: linear-gradient(#fff 20%, var(--dc) 20%, var(--dc) 80%, #fff 80%); }
+  #turnBadge {
+    align-self: center; background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 8px 10px; font-size: 7px; color: var(--text-dim); white-space: nowrap;
+  }
+
+  #msg {
+    position: absolute; top: 92px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 10px 16px; font-size: 8px; line-height: 1.8; z-index: 10; pointer-events: none;
+    opacity: 0; transition: opacity 0.3s; max-width: 90%; text-align: center;
+  }
+  #msg.show { opacity: 1; }
+
+  #powerWrap {
+    position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+    width: 300px; z-index: 10; pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  }
+  #powerWrap.show { opacity: 1; }
+  #powerLabel { text-align: center; font-size: 8px; color: var(--text-dim); margin-bottom: 7px; }
+  #powerBar { height: 16px; background: #000; border: 3px solid var(--panel-border); overflow: hidden; }
+  #powerFill { height: 100%; width: 0%; background: linear-gradient(90deg, #2ecc71, #f1c40f, #e74c3c); transition: width 0.03s linear; }
+
+  #help {
+    position: absolute; left: 12px; bottom: 12px; z-index: 10;
+    background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 10px 12px; font-size: 7px; color: var(--text-dim); line-height: 2.2; pointer-events: none;
+  }
+  #help b { color: var(--accent); }
+
+  #endPanel { text-align: center; }
+  #endTitle { font-size: 22px; line-height: 1.5; margin-bottom: 14px; color: var(--accent); text-shadow: 3px 3px 0 #000; }
+  #endReason { color: var(--text-dim); font-size: 9px; line-height: 1.9; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="hudCard" id="card0"><div class="pname"></div><div class="pgroup"></div><div class="dots"></div></div>
+  <div id="turnBadge"></div>
+  <div class="hudCard" id="card1"><div class="pname"></div><div class="pgroup"></div><div class="dots"></div></div>
+</div>
+
+<div id="msg"></div>
+
+<div id="powerWrap"><div id="powerLabel">POWER</div><div id="powerBar"><div id="powerFill"></div></div></div>
+
+<div id="help" class="hidden">
+  <b>DRAG</b> orbit camera<br>
+  <b>SCROLL / PINCH</b> zoom<br>
+  <b>DRAG BACK FROM CUE BALL</b> pull &amp; release to shoot<br>
+  <b>H</b> hide help
+</div>
+
+<div id="setupOverlay" class="overlay">
+  <div class="panel">
+    <h1>&#127921; PIXEL POOL</h1>
+    <div class="sub">8-BALL &middot; TWO PLAYERS, ONE SCREEN.<br>ENTER YOUR NAMES, THEN BREAK.</div>
+    <div id="playersRow"></div>
+    <button class="bigBtn" id="startBtn">RACK 'EM UP</button>
+  </div>
+</div>
+
+<div id="endOverlay" class="overlay hidden">
+  <div class="panel" id="endPanel">
+    <div id="endTitle"></div>
+    <div id="endReason"></div>
+    <button class="bigBtn" id="rematchBtn">REMATCH</button>
+    <button class="bigBtn ghostBtn" id="changeBtn">CHANGE PLAYERS</button>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
