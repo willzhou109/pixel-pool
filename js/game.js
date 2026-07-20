@@ -150,59 +150,223 @@ function shuffle(a) {
 
 /* ================================= TABLE ================================ */
 
-const FELT = '#2e7d4f';
-const FELT_DARK = '#276b44';
-const WOOD = '#5a3a24';
-const WOOD_DARK = '#462c1a';
+const LEG_TOP = TABLE_Y - 0.18; // legs rise from the floor to the apron underside
 
-{
+function metalMat(color) {
+  return new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.38, metalness: 0.65 });
+}
+
+// A box connecting two 3D points (its local +Y aligned along the span) — used
+// for angled/crossed/splayed legs. `taper` gives a narrower bottom (0..1).
+function strut(x0, y0, z0, x1, y1, z1, w, m, taper) {
+  const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+  const len = Math.hypot(dx, dy, dz);
+  let geo;
+  if (taper != null) geo = new THREE.CylinderGeometry(w, w * taper, len, 4);
+  else geo = new THREE.BoxGeometry(w, len, w);
+  const mesh = new THREE.Mesh(geo, m);
+  if (taper != null) mesh.rotation.y = Math.PI / 4;
+  mesh.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  mesh.quaternion.multiplyQuaternions(
+    new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(dx, dy, dz).normalize()),
+    mesh.quaternion);
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  return mesh;
+}
+
+/* --------------------------- table leg / base styles -------------------- */
+
+// Antique billiard: six flared square pedestal legs, three down each long rail.
+function baseClassic(table, C) {
+  const bm = mat(C.frame), dm = mat(C.frameDark), am = mat(C.accent);
+  function leg() {
+    const g = new THREE.Group();
+    const H = LEG_TOP, rot = Math.PI / 4;
+    const seg = (rt, rb, h, y, m) => {
+      const s = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 4), m);
+      s.rotation.y = rot; s.position.y = y; s.castShadow = s.receiveShadow = true;
+      g.add(s);
+    };
+    const shaftH = H - 0.26;
+    seg(0.08, 0.125, 0.13, 0.065, bm);
+    seg(0.098, 0.08, shaftH, 0.13 + shaftH / 2, dm);
+    seg(0.106, 0.098, 0.13, H - 0.065, bm);
+    const capY = H - 0.065, off = 0.072;
+    for (const s of [-1, 1]) {
+      const iz = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.006), am); iz.position.set(0, capY, s * off); g.add(iz);
+      const ix = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.08, 0.05), am); ix.position.set(s * off, capY, 0); g.add(ix);
+    }
+    return g;
+  }
+  for (const zs of [-1, 1]) for (const lx of [-(PW - 0.05), 0, PW - 0.05]) {
+    const l = leg(); l.position.set(lx, 0, zs * (PH - 0.005)); table.add(l);
+  }
+}
+
+// Modern: matte-black crossed X pedestals at each end.
+function baseModern(table, C) {
+  const m = metalMat(C.frame);
+  const zw = PH - 0.04, H = LEG_TOP;
+  for (const xs of [-1, 1]) {
+    const x = xs * (PW - 0.28);
+    table.add(strut(x, H, -zw, x, 0.03, zw, 0.07, m));
+    table.add(strut(x, H, zw, x, 0.03, -zw, 0.07, m));
+    // feet
+    for (const zs of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.04, 0.16), m);
+      f.position.set(x, 0.02, zs * zw); f.castShadow = f.receiveShadow = true; table.add(f);
+    }
+  }
+  // central spine tying the two X's together
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW - 0.28), 0.06, 0.08), m);
+  spine.position.set(0, H * 0.5, 0); spine.castShadow = true; table.add(spine);
+}
+
+// Mid-century modern: four slim tapered round legs splayed outward.
+function baseMidCentury(table, C) {
+  const m = mat(C.frame);
+  const H = LEG_TOP;
+  for (const xs of [-1, 1]) for (const zs of [-1, 1]) {
+    const tx = xs * (PW - 0.32), tz = zs * (PH - 0.18);   // top (inset)
+    const bx = xs * (PW - 0.12), bz = zs * (PH + 0.02);   // foot (splayed out)
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.02, 1, 8), m);
+    const dx = bx - tx, dy = -H, dz = bz - tz, len = Math.hypot(dx, dy, dz);
+    leg.scale.y = len;
+    leg.position.set((tx + bx) / 2, H / 2, (tz + bz) / 2);
+    leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, dy, dz).normalize());
+    leg.castShadow = leg.receiveShadow = true;
+    table.add(leg);
+  }
+}
+
+// Farmhouse: two chunky weathered-wood plank trestles + a low stretcher.
+function baseFarmhouse(table, C) {
+  const bm = mat(C.frame), dm = mat(C.frameDark);
+  const H = LEG_TOP;
+  for (const xs of [-1, 1]) {
+    const x = xs * (PW - 0.34);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.10, H, 2 * (PH - 0.06)), bm);
+    panel.position.set(x, H / 2, 0); panel.castShadow = panel.receiveShadow = true; table.add(panel);
+    // foot rail under the panel
+    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.09, 2 * (PH - 0.02)), dm);
+    foot.position.set(x, 0.045, 0); foot.castShadow = foot.receiveShadow = true; table.add(foot);
+  }
+  const stretch = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW - 0.34), 0.10, 0.12), dm);
+  stretch.position.set(0, H * 0.42, 0); stretch.castShadow = true; table.add(stretch);
+}
+
+// Industrial: black iron A-frame trestles, cross beam, and a decorative gear.
+function baseIndustrial(table, C) {
+  const m = metalMat(C.frameDark);
+  const zw = PH - 0.05, H = LEG_TOP;
+  for (const xs of [-1, 1]) {
+    const x = xs * (PW - 0.3);
+    table.add(strut(x, H, 0, x, 0.03, zw, 0.05, m));
+    table.add(strut(x, H, 0, x, 0.03, -zw, 0.05, m));
+    for (const zs of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.04, 0.14), m);
+      f.position.set(x, 0.02, zs * zw); f.castShadow = true; table.add(f);
+    }
+  }
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW - 0.3), 0.06, 0.06), m);
+  beam.position.set(0, H * 0.55, 0); beam.castShadow = true; table.add(beam);
+  const gear = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.04, 8), m);
+  gear.rotation.x = Math.PI / 2; gear.position.set(PW - 0.3, H * 0.55, zw + 0.02);
+  gear.castShadow = true; table.add(gear);
+}
+
+// Outdoor: four straight square aluminium posts with leveling feet.
+function baseOutdoor(table, C) {
+  const m = metalMat(C.frame), fm = metalMat(C.frameDark);
+  const H = LEG_TOP;
+  for (const xs of [-1, 1]) for (const zs of [-1, 1]) {
+    const x = xs * (PW - 0.08), z = zs * (PH - 0.02);
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, H - 0.03, 0.09), m);
+    post.position.set(x, (H - 0.03) / 2 + 0.03, z); post.castShadow = post.receiveShadow = true; table.add(post);
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.03, 10), fm);
+    foot.position.set(x, 0.015, z); foot.castShadow = true; table.add(foot);
+  }
+}
+
+// Dining: walnut X-crossed trestles at each end joined by a stretcher.
+function baseDining(table, C) {
+  const bm = mat(C.frame), dm = mat(C.frameDark);
+  const zw = PH - 0.06, H = LEG_TOP;
+  for (const xs of [-1, 1]) {
+    const x = xs * (PW - 0.26);
+    table.add(strut(x, H, -zw, x, 0.04, zw, 0.08, bm));
+    table.add(strut(x, H, zw, x, 0.04, -zw, 0.08, bm));
+    for (const zs of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.06, 0.18), dm);
+      f.position.set(x, 0.03, zs * zw); f.castShadow = f.receiveShadow = true; table.add(f);
+    }
+  }
+  const stretch = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW - 0.26), 0.09, 0.09), dm);
+  stretch.position.set(0, H * 0.5, 0); stretch.castShadow = true; table.add(stretch);
+}
+
+const TABLE_STYLES = [
+  { name: 'Classic',      felt: '#2e7d4f', feltDark: '#276b44', frame: '#5e3016', frameDark: '#301608', accent: '#c19a5e', inlays: true,  metal: false, base: baseClassic },
+  { name: 'Modern',       felt: '#2f6f47', feltDark: '#28603d', frame: '#17181c', frameDark: '#0e0e12', accent: '#17181c', inlays: false, metal: true,  base: baseModern },
+  { name: 'Mid-century',  felt: '#8b9099', feltDark: '#7d828b', frame: '#7a5230', frameDark: '#5a3c22', accent: '#7a5230', inlays: false, metal: false, base: baseMidCentury },
+  { name: 'Farmhouse',    felt: '#8f96a0', feltDark: '#828892', frame: '#9c8d76', frameDark: '#77694f', accent: '#b7ab95', inlays: false, metal: false, base: baseFarmhouse },
+  { name: 'Industrial',   felt: '#3b424b', feltDark: '#343a42', frame: '#7a5638', frameDark: '#26262b', accent: '#26262b', inlays: false, metal: false, base: baseIndustrial },
+  { name: 'Outdoor',      felt: '#2a5ca8', feltDark: '#254f90', frame: '#d6dadf', frameDark: '#b3b8be', accent: '#d6dadf', inlays: false, metal: true,  base: baseOutdoor },
+  { name: 'Dining',       felt: '#274a86', feltDark: '#213f73', frame: '#7a5230', frameDark: '#573a20', accent: '#a07a4e', inlays: false, metal: false, base: baseDining },
+];
+
+let tableGroup = null;
+let currentTableStyle = 0;
+
+function disposeGroup(g) {
+  g.traverse(o => {
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+  });
+}
+
+function buildTable(C) {
   const table = new THREE.Group();
+  const frameMat = C.metal ? metalMat(C.frame) : mat(C.frame);
+  const apronMat = C.metal ? metalMat(C.frameDark) : mat(C.frameDark);
 
   // slate / felt bed
-  const bed = box(2 * PW + 0.06, 0.06, 2 * PH + 0.06, FELT);
-  bed.position.y = TABLE_Y - 0.03;
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(2 * PW + 0.06, 0.06, 2 * PH + 0.06), mat(C.felt));
+  bed.position.y = TABLE_Y - 0.03; bed.castShadow = bed.receiveShadow = true;
   table.add(bed);
 
-  // felt markings: head string spot + foot spot
+  // felt markings
   const spotGeo = new THREE.CircleGeometry(0.012, 8);
   for (const sx of [-PW / 2, PW / 2]) {
     const s = new THREE.Mesh(spotGeo, mat('#cfe3d5'));
-    s.rotation.x = -Math.PI / 2;
-    s.position.set(sx, TABLE_Y + 0.0008, 0);
+    s.rotation.x = -Math.PI / 2; s.position.set(sx, TABLE_Y + 0.0008, 0);
     table.add(s);
   }
 
-  // cushions: extruded trapezoids with angled ends near pocket mouths.
-  // Shape lives in (x, y); after geometry.rotateX(-PI/2): length along x,
-  // nose (shape +y) points toward -z, extrusion (height) points up.
+  // cushions
   const cushH = 0.045, cushDepth = 0.052;
+  const cushMat = mat(C.feltDark);
   function cushion(len, cut) {
     const half = len / 2;
     const s = new THREE.Shape();
-    s.moveTo(-half, 0);
-    s.lineTo(half, 0);
-    s.lineTo(half - cut, cushDepth);
-    s.lineTo(-half + cut, cushDepth);
-    s.closePath();
+    s.moveTo(-half, 0); s.lineTo(half, 0);
+    s.lineTo(half - cut, cushDepth); s.lineTo(-half + cut, cushDepth); s.closePath();
     const g = new THREE.ExtrudeGeometry(s, { depth: cushH, bevelEnabled: false });
     g.rotateX(-Math.PI / 2);
-    const m = new THREE.Mesh(g, mat(FELT_DARK));
+    const m = new THREE.Mesh(g, cushMat);
     m.castShadow = true; m.receiveShadow = true;
     return m;
   }
-  // long rails (z = ±PH): two segments each, split by the side pocket.
-  // Nose face must land exactly on z = ±PH so bounce visuals match physics.
   const longLen = PW - CORNER_GAP - SIDE_GAP;
   const longCx = (PW - CORNER_GAP + SIDE_GAP) / 2;
-  for (const zs of [-1, 1]) {
-    for (const xs of [-1, 1]) {
-      const c = cushion(longLen, 0.035);
-      if (zs < 0) c.rotation.y = Math.PI;
-      c.position.set(xs * longCx, TABLE_Y, zs * (PH + cushDepth));
-      table.add(c);
-    }
+  for (const zs of [-1, 1]) for (const xs of [-1, 1]) {
+    const c = cushion(longLen, 0.035);
+    if (zs < 0) c.rotation.y = Math.PI;
+    c.position.set(xs * longCx, TABLE_Y, zs * (PH + cushDepth));
+    table.add(c);
   }
-  // short rails (x = ±PW)
   const shortLen = 2 * (PH - CORNER_GAP);
   for (const xs of [-1, 1]) {
     const c = cushion(shortLen, 0.035);
@@ -211,58 +375,57 @@ const WOOD_DARK = '#462c1a';
     table.add(c);
   }
 
-  // wooden frame
+  // rail frame
   const railW = 0.11, railH = 0.09;
   const frameX = PW + cushDepth + railW / 2;
   const frameZ = PH + cushDepth + railW / 2;
-  const fx = box(2 * (PW + cushDepth + railW), railH, railW, WOOD);
   for (const zs of [-1, 1]) {
-    const r = fx.clone();
-    r.position.set(0, TABLE_Y + 0.005, zs * frameZ);
-    table.add(r);
+    const r = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW + cushDepth + railW), railH, railW), frameMat);
+    r.position.set(0, TABLE_Y + 0.005, zs * frameZ); r.castShadow = r.receiveShadow = true; table.add(r);
   }
-  const fz = box(railW, railH, 2 * (PH + cushDepth), WOOD);
   for (const xs of [-1, 1]) {
-    const r = fz.clone();
-    r.position.set(xs * frameX, TABLE_Y + 0.005, 0);
-    table.add(r);
+    const r = new THREE.Mesh(new THREE.BoxGeometry(railW, railH, 2 * (PH + cushDepth)), frameMat);
+    r.position.set(xs * frameX, TABLE_Y + 0.005, 0); r.castShadow = r.receiveShadow = true; table.add(r);
   }
 
-  // Pockets: a flat dark "mouth" that reads as an opening flush with the cloth,
-  // plus a shallow recess below for depth. The mouth uses polygonOffset so it
-  // always wins the depth test against the coplanar felt (no z-fighting), which
-  // is what caused the green/brown flicker when the rim sat level with the felt.
+  // pockets (flush dark mouths + recess; polygonOffset avoids z-fighting)
   const pocketMat = new THREE.MeshStandardMaterial({
     color: '#0a0a0f', flatShading: true, roughness: 0.95, metalness: 0.0,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
   });
   for (const p of POCKETS) {
     const mouth = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.12, 18), pocketMat);
-    mouth.rotation.x = -Math.PI / 2;
-    mouth.position.set(p.x, TABLE_Y + 0.0015, p.z); // flush decal on the felt
-    mouth.receiveShadow = true;
-    table.add(mouth);
-    // recess below (top kept just under the felt so it never coplanar-fights)
-    const cup = new THREE.Mesh(
-      new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12),
-      pocketMat
-    );
-    cup.position.set(p.x, TABLE_Y - 0.045, p.z);
-    table.add(cup);
+    mouth.rotation.x = -Math.PI / 2; mouth.position.set(p.x, TABLE_Y + 0.0015, p.z);
+    mouth.receiveShadow = true; table.add(mouth);
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12), pocketMat);
+    cup.position.set(p.x, TABLE_Y - 0.045, p.z); table.add(cup);
   }
 
-  // apron + legs
-  const apron = box(2 * PW + 0.16, 0.12, 2 * PH + 0.16, WOOD_DARK);
-  apron.position.y = TABLE_Y - 0.115;
+  // apron skirt
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(2 * PW + 0.16, 0.12, 2 * PH + 0.16), apronMat);
+  apron.position.y = TABLE_Y - 0.12; apron.castShadow = apron.receiveShadow = true;
   table.add(apron);
-  for (const xs of [-1, 1]) for (const zs of [-1, 1]) {
-    const leg = box(0.11, TABLE_Y - 0.16, 0.11, WOOD_DARK);
-    leg.position.set(xs * (PW - 0.06), (TABLE_Y - 0.16) / 2, zs * (PH - 0.02));
-    table.add(leg);
+  if (C.inlays) {
+    const am = mat(C.accent), apronZ = PH + 0.08 + 0.003;
+    for (const zs of [-1, 1]) for (const fx of [-0.66, -0.22, 0.22, 0.66]) {
+      const inlay = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.075, 0.006), am);
+      inlay.position.set(fx * PW, TABLE_Y - 0.12, zs * apronZ); table.add(inlay);
+    }
   }
 
-  scene.add(table);
+  // style-specific legs / base
+  C.base(table, C);
+  return table;
 }
+
+function setTableStyle(i) {
+  currentTableStyle = ((i % TABLE_STYLES.length) + TABLE_STYLES.length) % TABLE_STYLES.length;
+  if (tableGroup) { scene.remove(tableGroup); disposeGroup(tableGroup); }
+  tableGroup = buildTable(TABLE_STYLES[currentTableStyle]);
+  scene.add(tableGroup);
+}
+
+setTableStyle(0);
 
 /* ================================= BALLS ================================ */
 
@@ -740,6 +903,9 @@ function startMatch() {
   cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95; // first-person: low, just behind the cue ball
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
+  const sw = document.getElementById('styleSwitch');
+  sw.classList.remove('hidden');
+  document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
   toast(`${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
   updateHUD();
 }
@@ -810,6 +976,31 @@ function buildSetupUI() {
     card.appendChild(nameIn);
     row.appendChild(card);
   });
+  buildStyleRow();
+}
+
+// Table-style picker (setup panel row + shared with the in-game switcher).
+function buildStyleRow() {
+  const row = document.getElementById('styleRow');
+  if (!row) return;
+  row.innerHTML = '';
+  TABLE_STYLES.forEach((st, i) => {
+    const b = document.createElement('button');
+    b.className = 'hatBtn' + (i === currentTableStyle ? ' sel' : '');
+    b.textContent = st.name.toUpperCase();
+    b.addEventListener('click', () => selectTableStyle(i, false));
+    row.appendChild(b);
+  });
+}
+
+function selectTableStyle(i, announce) {
+  setTableStyle(i);
+  const name = TABLE_STYLES[currentTableStyle].name;
+  const nameEl = document.getElementById('styleName');
+  if (nameEl) nameEl.textContent = name.toUpperCase();
+  const row = document.getElementById('styleRow');
+  if (row) Array.from(row.children).forEach((c, idx) => c.classList.toggle('sel', idx === currentTableStyle));
+  if (announce) toast(`Table style: ${name}`);
 }
 
 document.getElementById('startBtn').addEventListener('click', () => {
@@ -824,12 +1015,16 @@ document.getElementById('rematchBtn').addEventListener('click', () => {
 document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
+  document.getElementById('styleSwitch').classList.add('hidden');
   buildSetupUI();
   document.getElementById('setupOverlay').classList.remove('hidden');
   state = S.SETUP;
   cam.goal.set(0, TABLE_Y, 0);
   cam.radius = 3.2; cam.pitch = 0.5;
 });
+
+document.getElementById('stylePrev').addEventListener('click', () => selectTableStyle(currentTableStyle - 1, true));
+document.getElementById('styleNext').addEventListener('click', () => selectTableStyle(currentTableStyle + 1, true));
 
 window.addEventListener('keydown', e => {
   if (e.key === 'h' || e.key === 'H') document.getElementById('help').classList.toggle('hidden');
