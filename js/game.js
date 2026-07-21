@@ -108,9 +108,21 @@ function box(w, h, d, color, opts) {
   m.castShadow = true; m.receiveShadow = true;
   return m;
 }
+// Rack RNG. Defaults to Math.random (offline); online play swaps in a seeded
+// generator (mulberry32) so both clients build the identical starting rack.
+let rng = Math.random;
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 function shuffle(a) {
   for (let i = a.length - 1; i > 0; i--) {
-    const j = (Math.random() * (i + 1)) | 0;
+    const j = (rng() * (i + 1)) | 0;
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
@@ -720,6 +732,21 @@ const stick = new THREE.Group();
 stick.visible = false;
 scene.add(stick);
 
+// Opponent's floating cue for online play — a translucent, tinted copy of the
+// stick shown from the remote player's streamed aim. Purely visual (no shadow).
+const ghostStick = new THREE.Group();
+{
+  const len = 1.42;
+  const gm = c => new THREE.MeshStandardMaterial({ color: c, transparent: true, opacity: 0.5, flatShading: true, roughness: 0.5 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.017, len, 9), gm('#7fd0ff'));
+  shaft.rotation.x = -Math.PI / 2; shaft.position.z = len / 2;
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.0075, 0.025, 9), gm('#ffffff'));
+  tip.rotation.x = -Math.PI / 2; tip.position.z = 0.0125;
+  ghostStick.add(shaft, tip);
+}
+ghostStick.visible = false;
+scene.add(ghostStick);
+
 const guideMat = new THREE.LineDashedMaterial({ color: '#ffffff', dashSize: 0.035, gapSize: 0.025, transparent: true, opacity: 0.75 });
 const guideLine = new THREE.Line(new THREE.BufferGeometry(), guideMat);
 guideLine.frustumCulled = false;
@@ -763,7 +790,8 @@ function castAim(px, pz, dx, dz) {
 }
 
 function updateAimVisuals() {
-  const aiming = (state === S.AIM || state === S.CHARGE) && !cue.potted;
+  updateGhostCue(); // opponent's floating cue (online watcher)
+  const aiming = (state === S.AIM || state === S.CHARGE) && !cue.potted && myTurn();
   const AA = window.AimAssist;
   // "Lines" assist toggles the guide/object/ghost visuals; the cue stick and
   // pocket-preview are independent of it.
@@ -830,6 +858,28 @@ const players = [
   { cfg: { name: 'Player 2' }, group: null },
 ];
 
+/* ------------------------------- online -------------------------------- */
+// Online play is client-authoritative: on your turn you run the real game and
+// stream it out (aim → shoot → ball snapshots → authoritative post-shot state);
+// on the opponent's turn you run no physics and just render what they send.
+let onlineMode = false;
+let mySeat = 0;                 // which players[] index is me
+let netSink = null;            // (msg) => send to opponent (set by online.js)
+let netExit = null;           // () => return to lobby (set by online.js)
+let remoteAim = null;         // {yaw, pull, cx, cz} while watching the opponent aim
+const RENDER_DELAY = 0.10;    // s of interpolation delay for opponent snapshots
+let snapBuf = [];             // [{t, pos:{id:[x,z]}}] recent opponent snapshots
+let lastSnapT = 0;            // throttle: last outbound snapshot time (ms)
+let lastAimT = 0;            // throttle: last outbound aim time (ms)
+let lastAimKey = '';          // throttle: last outbound aim, to skip duplicates
+let lastEnd = null;           // {winner, reason} captured by endGame for the net
+
+// True when I control the cue right now (offline, or my turn online).
+function myTurn() { return !onlineMode || turn === mySeat; }
+// True when I'm watching the opponent shoot (online, their turn).
+function watching() { return onlineMode && turn !== mySeat; }
+function netSend(msg) { if (onlineMode && netSink) netSink(msg); }
+
 function remaining(group) {
   const lo = group === 'solid' ? 1 : 9, hi = group === 'solid' ? 7 : 15;
   let n = 0;
@@ -847,6 +897,9 @@ function fire(power) {
   chargePull = 0;
   state = S.ROLLING;
   striking = true;
+  // Tell the opponent the shot is happening (they'll animate + await snapshots).
+  netSend({ t: 'shoot', yaw: cam.yaw, power });
+  lastSnapT = 0; // force an immediate snapshot once the ball starts moving
   const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
   const start = performance.now();
   const dur = 70;
@@ -913,6 +966,7 @@ function resolveShot() {
 
 function endGame(winner, reason) {
   state = S.END;
+  lastEnd = { winner, reason };
   document.getElementById('endTitle').textContent = `🏆 ${players[winner].cfg.name} wins!`;
   document.getElementById('endReason').textContent = reason;
   document.getElementById('endOverlay').classList.remove('hidden');
@@ -920,6 +974,8 @@ function endGame(winner, reason) {
 }
 
 function startMatch() {
+  onlineMode = false;          // local match: full control, random rack
+  rng = Math.random;
   players[0].group = null;
   players[1].group = null;
   turn = 0;
@@ -934,6 +990,200 @@ function startMatch() {
   toast(`${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
   updateHUD();
 }
+
+/* ============================== ONLINE PLAY ============================= */
+// See the "online" state block above. game.js owns all game logic (including
+// the opponent-snapshot interpolation); js/online.js is just the relay to the
+// socket. Messages: aim, shoot, snap (mid-shot), state (authoritative result).
+
+const round4 = v => Math.round(v * 1e4) / 1e4;
+const nowSec = () => performance.now() / 1000;
+
+function setBallVisual(b) {
+  if (b.potted) { b.mesh.visible = false; b.sink = 0; }
+  else {
+    b.mesh.visible = true; b.mesh.scale.setScalar(1);
+    b.mesh.position.set(b.x, BALL_Y, b.z);
+  }
+}
+
+// ---- outbound (my turn) ----
+function maybeSendAim() {
+  const nowMs = performance.now();
+  if (nowMs - lastAimT < 40) return; // cap ~25 Hz
+  const pull = state === S.CHARGE ? chargePull : 0;
+  const key = cam.yaw.toFixed(3) + ',' + pull.toFixed(3) + ',' + cue.x.toFixed(3) + ',' + cue.z.toFixed(3);
+  if (key === lastAimKey) return;
+  lastAimT = nowMs; lastAimKey = key;
+  netSend({ t: 'aim', yaw: cam.yaw, pull, cx: round4(cue.x), cz: round4(cue.z) });
+}
+function maybeSendSnap(nowMs) {
+  if (nowMs - lastSnapT < 50) return; // ~20 Hz
+  lastSnapT = nowMs;
+  netSend({ t: 'snap', b: balls.filter(b => !b.potted).map(b => [b.id, round4(b.x), round4(b.z)]) });
+}
+function serializeState(phase) {
+  const msg = {
+    t: 'state', phase, turn,
+    groups: [players[0].group, players[1].group],
+    b: balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]),
+  };
+  if (phase === 'end' && lastEnd) { msg.winner = lastEnd.winner; msg.reason = lastEnd.reason; }
+  return msg;
+}
+// Called right after resolveShot() on the shooter's client.
+function onlineAfterResolve() {
+  const phase = state === S.END ? 'end' : (state === S.PLACING ? 'place' : 'aim');
+  netSend(serializeState(phase));
+  lastAimKey = '';
+  if (state !== S.END && !myTurn()) {
+    // Turn passed to the opponent — I become the watcher.
+    state = S.AIM;
+    remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  }
+}
+
+// ---- inbound (opponent's turn) ----
+function apply(msg) {
+  if (!onlineMode || !msg) return;
+  if (msg.t === 'aim') applyAim(msg);
+  else if (msg.t === 'shoot') applyShoot(msg);
+  else if (msg.t === 'snap') applySnap(msg);
+  else if (msg.t === 'state') applyState(msg);
+}
+function applyAim(msg) {
+  remoteAim = { yaw: msg.yaw, pull: msg.pull || 0, cx: msg.cx, cz: msg.cz };
+  if (msg.cx != null) { // reflect cue position (covers ball-in-hand placement)
+    cue.x = msg.cx; cue.z = msg.cz; cue.vx = cue.vz = 0;
+    cue.potted = false; cue.sink = 0; setBallVisual(cue);
+  }
+  if (state !== S.ROLLING) state = S.AIM;
+}
+function applyShoot() {
+  remoteAim = null; ghostStick.visible = false;
+  state = S.ROLLING;
+  // seed the interpolation buffer with the current layout as the first frame
+  snapBuf = [{ t: nowSec(), pos: ballPosMap() }];
+}
+function applySnap(msg) {
+  const pos = {};
+  for (const [id, x, z] of msg.b) pos[id] = [x, z];
+  snapBuf.push({ t: nowSec(), pos });
+  if (snapBuf.length > 24) snapBuf.shift();
+}
+function applyState(msg) {
+  for (const [id, x, z, potted] of msg.b) {
+    const b = balls[id];
+    b.x = x; b.z = z; b.vx = b.vz = 0; b.potted = !!potted; b.sink = 0;
+    setBallVisual(b);
+  }
+  turn = msg.turn;
+  players[0].group = msg.groups[0];
+  players[1].group = msg.groups[1];
+  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  striking = false; stick.visible = false; wasMoving = false; lastAimKey = '';
+  updateHUD();
+
+  if (msg.phase === 'end') {
+    state = S.END; lastEnd = { winner: msg.winner, reason: msg.reason };
+    document.getElementById('endTitle').textContent = `🏆 ${players[msg.winner].cfg.name} wins!`;
+    document.getElementById('endReason').textContent = msg.reason || '';
+    document.getElementById('endOverlay').classList.remove('hidden');
+  } else if (msg.phase === 'place') {
+    state = S.PLACING;
+    toast(myTurn() ? 'Ball in hand — place the cue ball' : `${players[turn].cfg.name} scratched`);
+  } else {
+    state = S.AIM;
+    toast(myTurn() ? 'Your turn' : `${players[turn].cfg.name}'s turn`);
+  }
+}
+
+function ballPosMap() {
+  const pos = {};
+  for (const b of balls) if (!b.potted) pos[b.id] = [b.x, b.z];
+  return pos;
+}
+// Interpolate opponent ball positions from the snapshot buffer (a render-delay
+// behind real time) for smooth motion despite ~20 Hz, jittery updates.
+function interpSample() {
+  if (snapBuf.length === 0) return;
+  const renderT = nowSec() - RENDER_DELAY;
+  let older = snapBuf[0], newer = snapBuf[snapBuf.length - 1];
+  for (let i = 0; i < snapBuf.length - 1; i++) {
+    if (snapBuf[i].t <= renderT && snapBuf[i + 1].t >= renderT) {
+      older = snapBuf[i]; newer = snapBuf[i + 1]; break;
+    }
+  }
+  const span = newer.t - older.t;
+  const a = span > 1e-4 ? Math.max(0, Math.min(1, (renderT - older.t) / span)) : 1;
+  for (const b of balls) {
+    if (b.potted) continue;
+    const o = older.pos[b.id], n = newer.pos[b.id];
+    if (o && n) { b.x = o[0] + (n[0] - o[0]) * a; b.z = o[1] + (n[1] - o[1]) * a; }
+    else if (n) { b.x = n[0]; b.z = n[1]; }
+  }
+}
+
+// Opponent's floating cue, positioned from their streamed aim.
+function updateGhostCue() {
+  if (watching() && remoteAim && !cue.potted && state !== S.ROLLING) {
+    const yaw = remoteAim.yaw;
+    const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
+    const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
+    const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
+    ghostStick.position.copy(base).addScaledVector(back, 0.035 + (remoteAim.pull || 0));
+    ghostStick.lookAt(base.clone().addScaledVector(back, 5));
+    ghostStick.visible = true;
+  } else {
+    ghostStick.visible = false;
+  }
+}
+
+function startOnline(opts) {
+  onlineMode = true;
+  mySeat = opts.mySeat | 0;
+  rng = mulberry32(opts.seed >>> 0);
+  players[0].cfg.name = opts.names[0];
+  players[1].cfg.name = opts.names[1];
+  players[0].group = players[1].group = null;
+  turn = 0;                        // seat 0 = breaker
+  rackBalls();
+  shotEvents = { potted: [], scratch: false };
+  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  striking = false; stick.visible = false; lastEnd = null; lastAimKey = '';
+  state = S.AIM; wasMoving = false;
+  cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95;
+
+  ['modeOverlay', 'loginOverlay', 'signupOverlay', 'lobbyOverlay', 'setupOverlay', 'endOverlay']
+    .forEach(id => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
+  document.getElementById('hud').classList.remove('hidden');
+  document.getElementById('help').classList.remove('hidden');
+  if (window.SettingsPanel) window.SettingsPanel.show();
+  document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
+  updateHUD();
+  toast(myTurn()
+    ? `You break, ${players[mySeat].cfg.name}! Drag back from the cue ball.`
+    : `${players[turn].cfg.name} breaks — watch for your turn.`);
+}
+
+function endOnline() {
+  onlineMode = false; rng = Math.random;
+  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  striking = false; stick.visible = false;
+  document.getElementById('endOverlay').classList.add('hidden');
+  document.getElementById('hud').classList.add('hidden');
+  document.getElementById('help').classList.add('hidden');
+  if (window.SettingsPanel) window.SettingsPanel.hide();
+  state = S.SETUP;
+  cam.goal.set(0, TABLE_Y, 0); cam.radius = 3.2; cam.pitch = 0.5;
+}
+
+window.PoolNetGame = {
+  startOnline, endOnline, apply,
+  isOnline: () => onlineMode,
+  setSink(fn) { netSink = fn; },
+  onExit(fn) { netExit = fn; },
+};
 
 /* ================================== UI ================================== */
 
@@ -1035,10 +1285,12 @@ document.getElementById('startBtn').addEventListener('click', () => {
 });
 document.getElementById('rematchBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
+  if (onlineMode) { if (netExit) netExit(); return; } // online: back to lobby
   startMatch();
 });
 document.getElementById('changeBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
+  if (onlineMode) { if (netExit) netExit(); return; } // online: back to lobby
   document.getElementById('hud').classList.add('hidden');
   if (window.SettingsPanel) window.SettingsPanel.hide();
   buildSetupUI();
@@ -1069,6 +1321,9 @@ canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   ptr.down = true; ptr.id = e.pointerId; ptr.moved = 0;
   ptr.x = e.clientX; ptr.y = e.clientY;
+
+  // While watching the opponent, the camera still orbits but the cue is locked.
+  if (watching()) { ptr.mode = 'orbit'; return; }
 
   if (state === S.PLACING) {
     ptr.mode = 'place'; // tap places the ball; dragging orbits the camera
@@ -1168,14 +1423,14 @@ canvas.addEventListener('wheel', e => {
    live in its own file rather than being wired directly into this closure. */
 window.PoolControls = {
   inPlay()     { return state !== S.SETUP && state !== S.END; },
-  canAim()     { return state === S.AIM && !cue.potted; },
+  canAim()     { return state === S.AIM && !cue.potted && myTurn(); },
   isCharging() { return state === S.CHARGE; },
 
   orbit(dyaw, dpitch) { cam.yaw += dyaw; cam.pitch += dpitch; },
   zoom(factor)        { cam.radius *= factor; },
 
   startCharge() {
-    if (state !== S.AIM || cue.potted) return;
+    if (state !== S.AIM || cue.potted || !myTurn()) return;
     state = S.CHARGE; chargePull = 0;
     canvas.classList.add('charging');
     powerWrap.classList.add('show');
@@ -1244,20 +1499,29 @@ function frame(now) {
   const dt = Math.min(0.05, (now - lastFrame) / 1000);
   lastFrame = now;
 
-  // physics
-  if (state === S.ROLLING || anyMoving()) {
+  // physics — skipped entirely while watching the opponent (their client is
+  // authoritative; our ball motion comes from their snapshots instead).
+  if (!watching() && (state === S.ROLLING || anyMoving())) {
     physAcc += dt;
     while (physAcc >= PHYS_H) {
       physicsStep(PHYS_H);
       physAcc -= PHYS_H;
     }
+    if (onlineMode && myTurn()) maybeSendSnap(now);
   }
 
   const moving = anyMoving();
-  if (state === S.ROLLING && wasMoving && !moving && !striking) {
+  if (!watching() && state === S.ROLLING && wasMoving && !moving && !striking) {
     resolveShot();
+    if (onlineMode) onlineAfterResolve(); // broadcast the authoritative result
   }
   wasMoving = moving;
+
+  // online streaming (my turn) / interpolation (watching)
+  if (onlineMode) {
+    if (myTurn() && (state === S.AIM || state === S.CHARGE)) maybeSendAim();
+    if (watching() && state === S.ROLLING) interpSample();
+  }
 
   // camera focus
   if (state === S.AIM || state === S.CHARGE) {
@@ -1294,6 +1558,7 @@ requestAnimationFrame(frame);
 /* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break */
 const q = new URLSearchParams(location.search);
 if (q.has('autostart')) {
+  document.getElementById('modeOverlay').classList.add('hidden');
   document.getElementById('setupOverlay').classList.add('hidden');
   startMatch();
   if (q.has('autoshot')) {
