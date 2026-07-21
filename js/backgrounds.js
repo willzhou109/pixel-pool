@@ -505,6 +505,7 @@
 
   let current = 0;
   let group = null;
+  let changeCb = null;   // notified on user-driven changes (for online sync)
 
   function dispose(gr) {
     gr.traverse(o => {
@@ -513,7 +514,9 @@
     });
   }
 
-  function apply(i, announce) {
+  // fromNet: true when applied from an opponent's sync message — suppresses the
+  // change callback so it isn't echoed back over the network.
+  function apply(i, announce, fromNet) {
     current = ((i % BACKGROUNDS.length) + BACKGROUNDS.length) % BACKGROUNDS.length;
     const B = BACKGROUNDS[current];
     if (group) { scene.remove(group); dispose(group); }
@@ -527,6 +530,7 @@
     const row = document.getElementById('bgRow');
     if (row) Array.from(row.children).forEach((c, idx) => c.classList.toggle('sel', idx === current));
     if (announce) S.toast(`Background: ${B.name}`);
+    if (!fromNet && changeCb) changeCb(current);
   }
 
   /* --------------------------------- UI ---------------------------------- */
@@ -549,4 +553,13 @@
   if (next) next.addEventListener('click', () => apply(current + 1, true));
 
   apply(0, false);   // establish the default environment on load
+
+  // Small surface for online sync (js/game.js): read/set the scene and be
+  // notified of user-driven changes.
+  window.PoolBackgrounds = {
+    apply,
+    current: () => current,
+    count: () => BACKGROUNDS.length,
+    setOnChange: fn => { changeCb = fn; },
+  };
 })();

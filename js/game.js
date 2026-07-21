@@ -22,6 +22,7 @@ const FRIC_C = 0.30;          // constant rolling deceleration (u/s^2)
 const FRIC_L = 0.30;          // linear (speed-proportional) drag (1/s)
 const STOP_V = 0.018;         // below this, a ball is stopped
 const MAX_V  = 5.0;           // full-power cue-ball speed
+const BREAK_BOOST = 1.9;      // extra cue speed on the opening break
 const MAX_PULL = 0.34;        // world-units of cue pull-back at full power
 const PHYS_H = 1 / 480;       // physics substep
 
@@ -107,6 +108,12 @@ function box(w, h, d, color, opts) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts));
   m.castShadow = true; m.receiveShadow = true;
   return m;
+}
+// Pick an ivory or charcoal sight-diamond color that reads against the rail.
+function diamondColor(frameHex) {
+  const n = parseInt(frameHex.slice(1), 16);
+  const lum = 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+  return lum > 140 ? '#2c2620' : '#ece3c8';
 }
 // Rack RNG. Defaults to Math.random (offline); online play swaps in a seeded
 // generator (mulberry32) so both clients build the identical starting rack.
@@ -381,6 +388,25 @@ function buildTable(C) {
     r.position.set(xs * frameX, TABLE_Y + 0.005, 0); r.castShadow = r.receiveShadow = true; table.add(r);
   }
 
+  // rail sight diamonds: three evenly spaced along every rail segment between
+  // adjacent pockets — 6 per long rail (split by the side pocket), 3 per short.
+  const diaGeo = new THREE.CircleGeometry(0.014, 4);
+  const diaMat = mat(diamondColor(C.frame), { roughness: 0.5 });
+  const diaY = TABLE_Y + 0.005 + railH / 2 + 0.001;
+  // `long` = the world axis the diamond is stretched along; we point it toward
+  // the table (perpendicular to the rail it sits on).
+  function diamond(x, z, long) {
+    const d = new THREE.Mesh(diaGeo, diaMat);
+    d.rotation.x = -Math.PI / 2;
+    d.scale.set(long === 'x' ? 1.7 : 1, long === 'z' ? 1.7 : 1, 1);
+    d.position.set(x, diaY, z); d.receiveShadow = true;
+    table.add(d);
+  }
+  for (const zs of [-1, 1]) for (const f of [-0.75, -0.5, -0.25, 0.25, 0.5, 0.75])
+    diamond(f * PW, zs * frameZ, 'z'); // long rails → point inward along z
+  for (const xs of [-1, 1]) for (const f of [-0.5, 0, 0.5])
+    diamond(xs * frameX, f * PH, 'x'); // short rails → point inward along x
+
   // pockets (flush dark mouths + recess; polygonOffset avoids z-fighting).
   // Each pocket gets its own material so the aim-assist can glow it green.
   pocketMats = [];
@@ -509,7 +535,10 @@ function rackBalls() {
   const cornerA = solids.pop(), cornerB = stripes.pop();
   const rest = shuffle(solids.concat(stripes));
 
-  const d = 2 * R * 1.005, dx = d * Math.SQRT1_2 * 1.24; // row spacing (~d*√3/2)
+  // Tight triangular rack: within-row spacing d ≈ 2R (a hair over, to avoid
+  // start-of-frame overlap), row spacing d·√3/2 so every neighbour just touches.
+  // A gap-free rack transfers the break's energy cleanly and scatters the pack.
+  const d = 2 * R * 1.0006, dx = d * Math.sqrt(3) / 2;
   let slot = 0;
   for (let row = 0; row < 5; row++) {
     for (let i = 0; i <= row; i++) {
@@ -524,6 +553,7 @@ function rackBalls() {
       slot++;
     }
   }
+  breakShot = true; // next shot is the opening break
   syncBallMeshes(0);
 }
 
@@ -551,7 +581,7 @@ function syncBallMeshes(dt) {
 
 /* ================================ PHYSICS =============================== */
 
-let shotEvents = { potted: [], scratch: false };
+let shotEvents = { potted: [], scratch: false, firstHit: null };
 
 function anyMoving() {
   for (const b of balls) if (!b.potted && (b.vx !== 0 || b.vz !== 0)) return true;
@@ -565,6 +595,9 @@ function potBall(b) {
   if (b.id === 0) shotEvents.scratch = true;
   else shotEvents.potted.push(b.id);
   sfx.pocket();
+  // Tell the watcher to sink this ball now, instead of leaving it stranded at
+  // its last streamed spot until the shot's authoritative state arrives.
+  if (onlineMode && myTurn()) netSend({ t: 'pot', id: b.id, x: round4(b.x), z: round4(b.z) });
 }
 
 function physicsStep(h) {
@@ -657,6 +690,10 @@ function physicsStep(h) {
         a.vx -= jimp * nx; a.vz -= jimp * nz;
         b.vx += jimp * nx; b.vz += jimp * nz;
         sfx.clack(Math.abs(rvn));
+        // record which object ball the cue ball strikes first this shot
+        if (shotEvents.firstHit === null && (a.id === 0 || b.id === 0)) {
+          shotEvents.firstHit = a.id === 0 ? b.id : a.id;
+        }
       }
     }
   }
@@ -846,9 +883,10 @@ function updateAimVisuals() {
 
 /* ============================== GAME STATE ============================== */
 
-const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5 };
+const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CHOOSING: 6 };
 let state = S.SETUP;
 let turn = 0;
+let breakShot = false;        // true until the opening break has been resolved
 let chargePull = 0;
 let striking = false;      // strike animation in progress
 let placeValid = false;
@@ -873,6 +911,10 @@ let lastSnapT = 0;            // throttle: last outbound snapshot time (ms)
 let lastAimT = 0;            // throttle: last outbound aim time (ms)
 let lastAimKey = '';          // throttle: last outbound aim, to skip duplicates
 let lastEnd = null;           // {winner, reason} captured by endGame for the net
+let lastFoul = '';            // last ball-in-hand reason, mirrored to the watcher
+let watcherStriking = false;  // ghost-cue strike animation in progress (mirrors `striking`)
+let applyingRemoteSetup = false; // guard: suppress re-broadcast while applying a synced scene
+let bgSyncHooked = false;     // whether the background change hook is registered yet
 
 // True when I control the cue right now (offline, or my turn online).
 function myTurn() { return !onlineMode || turn === mySeat; }
@@ -908,9 +950,10 @@ function fire(power) {
     if (t >= 1) {
       striking = false;
       stick.visible = false;
-      shotEvents = { potted: [], scratch: false };
-      cue.vx = d.x * power * MAX_V;
-      cue.vz = d.y * power * MAX_V;
+      shotEvents = { potted: [], scratch: false, firstHit: null };
+      const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
+      cue.vx = d.x * speed;
+      cue.vz = d.y * speed;
       sfx.strike(power);
       return;
     }
@@ -927,6 +970,7 @@ function resolveShot() {
   const potted = shotEvents.potted;
   const scratch = shotEvents.scratch;
   const potted8 = potted.includes(8);
+  const wasBreak = breakShot; breakShot = false;
 
   if (potted8) {
     // count remaining BEFORE this shot isn't needed: if group cleared now, 8 was last
@@ -938,23 +982,48 @@ function resolveShot() {
     return endGame(1 - turn, `${me.cfg.name} ${why}.`);
   }
 
+  // Illegal-first-contact foul. The cue ball's first strike must be a ball of
+  // the shooter's group — any ball but the 8 on an open table, or the 8 itself
+  // once the group is cleared. Touching nothing at all is a foul too.
+  // Note: groupOf(8) reports 'stripe', so the 8 must be excluded explicitly —
+  // otherwise hitting it first would look legal to the stripes player.
+  const first = shotEvents.firstHit;
+  const onEight = me.group && remaining(me.group) === 0;
+  const legalContact = first !== null && (
+    onEight ? first === 8
+      : me.group ? (first !== 8 && groupOf(first) === me.group)
+        : first !== 8);
+  const foul = scratch || !legalContact;
+
+  // Sinking a ball on a clean break lets the breaker pick their group instead
+  // of it being decided by whichever ball happened to drop.
+  if (wasBreak && !foul && !me.group && potted.some(id => id !== 8)) {
+    state = S.CHOOSING;
+    showGroupChoice(potted);
+    updateHUD();
+    return; // turn stays with the breaker; group is set when they pick
+  }
+
   // group assignment on first legal pot
-  if (!me.group && !scratch) {
-    const first = potted.find(id => id !== 8);
-    if (first != null) {
-      me.group = groupOf(first);
+  if (!me.group && !foul) {
+    const firstPot = potted.find(id => id !== 8);
+    if (firstPot != null) {
+      me.group = groupOf(firstPot);
       opp.group = me.group === 'solid' ? 'stripe' : 'solid';
       toast(`${me.cfg.name} is ${me.group === 'solid' ? 'SOLIDS' : 'STRIPES'}`);
     }
   }
 
   const pottedOwn = potted.some(id => me.group ? groupOf(id) === me.group : true);
-  const keepTurn = !scratch && potted.length > 0 && pottedOwn;
+  const keepTurn = !foul && potted.length > 0 && pottedOwn;
 
-  if (scratch) {
+  if (foul) {
     turn = 1 - turn;
-    toast(`Scratch! ${players[turn].cfg.name}: place the cue ball`);
     cue.vx = 0; cue.vz = 0;
+    lastFoul = scratch
+      ? `Scratch! ${players[turn].cfg.name}: place the cue ball`
+      : `Foul — ${first === null ? 'no ball hit' : 'wrong ball first'}! ${players[turn].cfg.name}: ball in hand`;
+    toast(lastFoul);
     state = S.PLACING;
   } else {
     if (!keepTurn) turn = 1 - turn;
@@ -963,6 +1032,37 @@ function resolveShot() {
   }
   updateHUD();
 }
+
+/* ---- break: let the breaker choose solids or stripes ---- */
+// A compact top bar (not a modal), so the table stays lit and the camera stays
+// free — the breaker can orbit/zoom to survey the spread before deciding.
+const chooseBar = document.getElementById('chooseBar');
+function showGroupChoice(potted) {
+  const s = potted.filter(id => id < 8).length;
+  const st = potted.filter(id => id > 8).length;
+  const parts = [];
+  if (s) parts.push(`${s} solid${s > 1 ? 's' : ''}`);
+  if (st) parts.push(`${st} stripe${st > 1 ? 's' : ''}`);
+  document.getElementById('chooseSub').textContent =
+    `You sank ${parts.join(' & ')} on the break — pick your set.`;
+  chooseBar.classList.remove('hidden');
+  // Pull back to an angled overview so the whole table is visible; the player
+  // can still orbit/zoom from here.
+  cam.radius = 2.6; cam.pitch = 0.9;
+}
+function chooseGroup(g) {
+  if (state !== S.CHOOSING) return;
+  const me = players[turn], opp = players[1 - turn];
+  me.group = g;
+  opp.group = g === 'solid' ? 'stripe' : 'solid';
+  chooseBar.classList.add('hidden');
+  toast(`${me.cfg.name} is ${g === 'solid' ? 'SOLIDS' : 'STRIPES'} — shoot again`);
+  state = S.AIM;
+  updateHUD();
+  if (onlineMode) netSend({ t: 'group', g: [players[0].group, players[1].group] });
+}
+document.getElementById('chooseSolids').addEventListener('click', () => chooseGroup('solid'));
+document.getElementById('chooseStripes').addEventListener('click', () => chooseGroup('stripe'));
 
 function endGame(winner, reason) {
   state = S.END;
@@ -980,7 +1080,7 @@ function startMatch() {
   players[1].group = null;
   turn = 0;
   rackBalls();
-  shotEvents = { potted: [], scratch: false };
+  shotEvents = { potted: [], scratch: false, firstHit: null };
   state = S.AIM;
   cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95; // first-person: low, just behind the cue ball
   document.getElementById('hud').classList.remove('hidden');
@@ -1029,6 +1129,7 @@ function serializeState(phase) {
     b: balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]),
   };
   if (phase === 'end' && lastEnd) { msg.winner = lastEnd.winner; msg.reason = lastEnd.reason; }
+  if (phase === 'place') msg.foul = lastFoul;
   return msg;
 }
 // Called right after resolveShot() on the shooter's client.
@@ -1039,7 +1140,7 @@ function onlineAfterResolve() {
   if (state !== S.END && !myTurn()) {
     // Turn passed to the opponent — I become the watcher.
     state = S.AIM;
-    remoteAim = null; ghostStick.visible = false; snapBuf = [];
+    remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   }
 }
 
@@ -1049,7 +1150,16 @@ function apply(msg) {
   if (msg.t === 'aim') applyAim(msg);
   else if (msg.t === 'shoot') applyShoot(msg);
   else if (msg.t === 'snap') applySnap(msg);
+  else if (msg.t === 'pot') applyPot(msg);
+  else if (msg.t === 'setup') applySetup(msg);
+  else if (msg.t === 'group') applyGroup(msg);
   else if (msg.t === 'state') applyState(msg);
+}
+function applyGroup(msg) {
+  players[0].group = msg.g[0];
+  players[1].group = msg.g[1];
+  updateHUD();
+  toast(`${players[turn].cfg.name} is ${players[turn].group === 'solid' ? 'SOLIDS' : 'STRIPES'}`);
 }
 function applyAim(msg) {
   remoteAim = { yaw: msg.yaw, pull: msg.pull || 0, cx: msg.cx, cz: msg.cz };
@@ -1059,17 +1169,48 @@ function applyAim(msg) {
   }
   if (state !== S.ROLLING) state = S.AIM;
 }
-function applyShoot() {
-  remoteAim = null; ghostStick.visible = false;
+function applyShoot(msg) {
+  remoteAim = null;
   state = S.ROLLING;
   // seed the interpolation buffer with the current layout as the first frame
   snapBuf = [{ t: nowSec(), pos: ballPosMap() }];
+
+  // Mirror fire()'s quick thrust animation on the ghost cue, so the watcher
+  // sees an actual strike instead of the ball just starting to move on its
+  // own. The ~100ms render delay in interpSample() means ball motion won't be
+  // visible yet anyway, giving this plenty of room to play out first.
+  watcherStriking = true;
+  const yaw = msg.yaw;
+  const pull0 = (msg.power || 0) * MAX_PULL;
+  const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
+  const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
+  const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
+  const start = performance.now();
+  const dur = 70;
+  (function anim() {
+    const t = (performance.now() - start) / dur;
+    if (t >= 1) { watcherStriking = false; ghostStick.visible = false; return; }
+    ghostStick.position.copy(base).addScaledVector(back, 0.035 + pull0 * (1 - t));
+    ghostStick.lookAt(base.clone().addScaledVector(back, 5));
+    ghostStick.visible = true;
+    requestAnimationFrame(anim);
+  })();
+  sfx.strike(msg.power || 0);
 }
 function applySnap(msg) {
   const pos = {};
   for (const [id, x, z] of msg.b) pos[id] = [x, z];
   snapBuf.push({ t: nowSec(), pos });
   if (snapBuf.length > 24) snapBuf.shift();
+}
+// Opponent potted a ball — snap it to the pocket and play the sink animation
+// (driven by syncBallMeshes), same as the shooter sees.
+function applyPot(msg) {
+  const b = balls[msg.id];
+  if (!b || b.potted) return;
+  if (msg.x != null) { b.x = msg.x; b.z = msg.z; b.mesh.position.set(b.x, BALL_Y, b.z); }
+  b.potted = true; b.sink = 0.25; b.vx = b.vz = 0;
+  sfx.pocket();
 }
 function applyState(msg) {
   for (const [id, x, z, potted] of msg.b) {
@@ -1080,7 +1221,7 @@ function applyState(msg) {
   turn = msg.turn;
   players[0].group = msg.groups[0];
   players[1].group = msg.groups[1];
-  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; wasMoving = false; lastAimKey = '';
   updateHUD();
 
@@ -1091,7 +1232,7 @@ function applyState(msg) {
     document.getElementById('endOverlay').classList.remove('hidden');
   } else if (msg.phase === 'place') {
     state = S.PLACING;
-    toast(myTurn() ? 'Ball in hand — place the cue ball' : `${players[turn].cfg.name} scratched`);
+    toast(myTurn() ? 'Ball in hand — place the cue ball' : (msg.foul || `${players[turn].cfg.name} fouled`));
   } else {
     state = S.AIM;
     toast(myTurn() ? 'Your turn' : `${players[turn].cfg.name}'s turn`);
@@ -1102,6 +1243,22 @@ function ballPosMap() {
   const pos = {};
   for (const b of balls) if (!b.potted) pos[b.id] = [b.x, b.z];
   return pos;
+}
+
+// ---- scene sync (table style + background) ----
+// Broadcast this client's current table + background so the opponent's scene
+// matches. Called by the breaker at match start and by either player on a
+// mid-match change.
+function sendSetup() {
+  if (!onlineMode || applyingRemoteSetup) return;
+  const bg = window.PoolBackgrounds ? window.PoolBackgrounds.current() : 0;
+  netSend({ t: 'setup', table: currentTableStyle, bg });
+}
+function applySetup(msg) {
+  applyingRemoteSetup = true;
+  if (typeof msg.table === 'number') selectTableStyle(msg.table, false);
+  if (typeof msg.bg === 'number' && window.PoolBackgrounds) window.PoolBackgrounds.apply(msg.bg, false, true);
+  applyingRemoteSetup = false;
 }
 // Interpolate opponent ball positions from the snapshot buffer (a render-delay
 // behind real time) for smooth motion despite ~20 Hz, jittery updates.
@@ -1126,6 +1283,7 @@ function interpSample() {
 
 // Opponent's floating cue, positioned from their streamed aim.
 function updateGhostCue() {
+  if (watcherStriking) return; // the strike animation in applyShoot() owns it for now
   if (watching() && remoteAim && !cue.potted && state !== S.ROLLING) {
     const yaw = remoteAim.yaw;
     const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
@@ -1148,8 +1306,8 @@ function startOnline(opts) {
   players[0].group = players[1].group = null;
   turn = 0;                        // seat 0 = breaker
   rackBalls();
-  shotEvents = { potted: [], scratch: false };
-  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  shotEvents = { potted: [], scratch: false, firstHit: null };
+  remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; lastEnd = null; lastAimKey = '';
   state = S.AIM; wasMoving = false;
   cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95;
@@ -1161,6 +1319,16 @@ function startOnline(opts) {
   if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
   updateHUD();
+
+  // Keep both scenes in sync. Register the background-change hook once (lazily,
+  // since backgrounds.js loads after this file), then let the breaker push its
+  // current table + background as the authoritative scene for the match.
+  if (!bgSyncHooked && window.PoolBackgrounds) {
+    window.PoolBackgrounds.setOnChange(() => sendSetup());
+    bgSyncHooked = true;
+  }
+  if (mySeat === 0) sendSetup();
+
   toast(myTurn()
     ? `You break, ${players[mySeat].cfg.name}! Drag back from the cue ball.`
     : `${players[turn].cfg.name} breaks — watch for your turn.`);
@@ -1168,9 +1336,10 @@ function startOnline(opts) {
 
 function endOnline() {
   onlineMode = false; rng = Math.random;
-  remoteAim = null; ghostStick.visible = false; snapBuf = [];
+  remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false;
   document.getElementById('endOverlay').classList.add('hidden');
+  chooseBar.classList.add('hidden');
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('help').classList.add('hidden');
   if (window.SettingsPanel) window.SettingsPanel.hide();
@@ -1276,6 +1445,7 @@ function selectTableStyle(i, announce) {
   const row = document.getElementById('styleRow');
   if (row) Array.from(row.children).forEach((c, idx) => c.classList.toggle('sel', idx === currentTableStyle));
   if (announce) toast(`Table style: ${name}`);
+  sendSetup(); // online: keep the opponent's table in sync (no-op offline / when applying a remote setup)
 }
 
 document.getElementById('startBtn').addEventListener('click', () => {
