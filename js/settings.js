@@ -14,15 +14,23 @@
 
   const btn = document.getElementById('settingsBtn');
   const panel = document.getElementById('settingsPanel');
+  const resetBtn = document.getElementById('resetZoomBtn');
   if (!btn || !panel) { console.warn('SettingsPanel: elements missing'); return; }
 
-  let open = false;
+  let open = false, shown = false;
+
+  // The reset-zoom button shares the corner: visible during a match, but hidden
+  // while the settings panel is open (the panel would overlap it).
+  function syncReset() {
+    if (resetBtn) resetBtn.classList.toggle('hidden', !shown || open);
+  }
 
   function setOpen(v) {
     open = v;
     panel.classList.toggle('hidden', !open);
     btn.classList.toggle('open', open);
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    syncReset();
   }
 
   btn.addEventListener('click', e => { e.stopPropagation(); setOpen(!open); });
@@ -40,7 +48,7 @@
 
   // Shown when a match starts, hidden (and force-closed) between matches.
   window.SettingsPanel = {
-    show() { btn.classList.remove('hidden'); },
-    hide() { setOpen(false); btn.classList.add('hidden'); },
+    show() { shown = true; btn.classList.remove('hidden'); syncReset(); },
+    hide() { shown = false; setOpen(false); btn.classList.add('hidden'); syncReset(); },
   };
 })();

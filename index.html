@@ -115,24 +115,37 @@
   }
   #msg.show { opacity: 1; }
 
-  /* Break group-choice bar — sits just under the HUD; the table stays live and
-     controllable behind it (no dimming backdrop, and it only captures clicks
-     on the buttons themselves). */
-  #chooseBar {
-    position: absolute; top: 86px; left: 50%; transform: translateX(-50%);
-    z-index: 15; display: flex; flex-direction: column; align-items: center; gap: 7px;
-    background: var(--panel); border: 3px solid var(--accent);
-    padding: 9px 16px; box-shadow: 5px 5px 0 rgba(0,0,0,0.5);
-    text-align: center; max-width: 92%; pointer-events: none;
+  /* Pocket notifications — upper-right feed (nudged down and in from the
+     corner). New toasts append to the bottom so the stack grows downward, and
+     each fades on its own 2s timer. */
+  #potFeed {
+    position: absolute; top: 78px; right: 40px; z-index: 12;
+    display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+    pointer-events: none; max-width: 240px;
   }
-  #chooseTitle { font-size: 9px; color: var(--accent); text-shadow: 2px 2px 0 #000; }
-  #chooseSub { font-size: 7px; color: var(--text-dim); line-height: 1.7; }
-  #chooseBar .chooseBtns { display: flex; gap: 10px; margin-top: 2px; pointer-events: auto; }
-  #chooseBar .chooseBtns button {
-    font-family: var(--px); font-size: 10px; padding: 8px 18px; cursor: pointer;
-    color: #10141e; background: var(--accent); border: none; box-shadow: 3px 3px 0 #8a6d00;
+  .potToast {
+    display: flex; align-items: center; gap: 9px;
+    background: var(--panel); border: 3px solid var(--panel-border);
+    box-shadow: 4px 4px 0 rgba(0,0,0,0.5); padding: 8px 11px;
+    animation: potIn 0.2s ease-out both;
   }
-  #chooseBar .chooseBtns button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #8a6d00; }
+  .potToast.out { animation: potOut 0.28s ease-in forwards; }
+  @keyframes potIn  { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+  @keyframes potOut { from { opacity: 1; } to { opacity: 0; transform: translateX(20px); } }
+  .potText { font-size: 7px; line-height: 1.7; color: var(--text); }
+  .potText .who { color: var(--accent); }
+  .pball {
+    flex: none; width: 18px; height: 18px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.28), inset 2px 2px 0 rgba(255,255,255,0.35);
+  }
+  .pball.cue { background: #f4f1e8; }
+  .pball.striped { background: linear-gradient(#fff 22%, var(--bc) 22%, var(--bc) 78%, #fff 78%); }
+  .pball span {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 9px; height: 9px; padding: 0 1px; border-radius: 5px;
+    background: #fff; color: #10141e; font-size: 5px; font-family: var(--px);
+  }
 
   #powerWrap {
     position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
@@ -144,12 +157,50 @@
   #powerFill { height: 100%; width: 0%; background: linear-gradient(90deg, #2ecc71, #f1c40f, #e74c3c); transition: width 0.03s linear; }
 
   #help {
-    position: absolute; left: 12px; bottom: 12px; z-index: 10;
+    position: absolute; left: 12px; top: 12px; z-index: 10;
     background: var(--panel); border: 3px solid var(--panel-border);
     padding: 10px 12px; font-size: 7px; color: var(--text-dim); line-height: 2.2; pointer-events: none;
   }
   #help b { color: var(--accent); }
   #help .helpHead { color: var(--text); font-size: 8px; letter-spacing: 1px; }
+
+  /* online chat — bottom-left, only shown during an online match */
+  #chat {
+    position: absolute; left: 12px; bottom: 12px; z-index: 12;
+    width: 230px; display: flex; flex-direction: column;
+    background: var(--panel); border: 3px solid var(--panel-border);
+  }
+  #chatHead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 9px; border-bottom: 3px solid var(--panel-border);
+    font-size: 7px; letter-spacing: 1px; color: var(--text);
+  }
+  #chatHead .chatTitle { color: var(--accent); }
+  #chatToggle {
+    font-family: var(--px); font-size: 8px; color: var(--text-dim);
+    background: none; border: none; cursor: pointer; padding: 0 2px;
+  }
+  #chatLog {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 9px; max-height: 168px; overflow-y: auto;
+    font-size: 8px; line-height: 1.6;
+  }
+  #chatLog .cmsg { word-break: break-word; }
+  #chatLog .cmsg .who { color: var(--accent); }
+  #chatLog .cmsg.them .who { color: #2ecc71; }
+  #chatLog .cmsg .txt { color: var(--text); }
+  #chatLog .cempty { color: var(--text-dim); font-size: 7px; }
+  #chatForm { display: flex; border-top: 3px solid var(--panel-border); }
+  #chatInput {
+    flex: 1; min-width: 0; padding: 8px 9px; border: none;
+    background: #000; color: var(--text); font-family: var(--px); font-size: 8px; outline: none;
+  }
+  #chatSend {
+    font-family: var(--px); font-size: 8px; color: #10141e; background: var(--accent);
+    border: none; padding: 0 12px; cursor: pointer;
+  }
+  #chatSend:active { transform: translate(1px, 1px); }
+  #chat.collapsed #chatLog, #chat.collapsed #chatForm { display: none; }
 
   /* in-game settings panel (a gear button toggles a panel holding every live control) */
   #settingsBtn {
@@ -160,6 +211,14 @@
   }
   #settingsBtn:active { transform: translate(1px, 1px); }
   #settingsBtn.open { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(241,196,15,0.35); }
+  /* reset-zoom button — stacked just above the settings button */
+  #resetZoomBtn {
+    position: absolute; bottom: 50px; right: 12px; z-index: 12;
+    font-family: var(--px); font-size: 8px; color: var(--accent);
+    background: var(--panel); border: 3px solid var(--panel-border);
+    padding: 9px 11px; cursor: pointer; letter-spacing: 1px;
+  }
+  #resetZoomBtn:active { transform: translate(1px, 1px); }
   #settingsPanel {
     position: absolute; bottom: 56px; right: 12px; z-index: 11;
     display: flex; flex-direction: column; gap: 12px; min-width: 300px;
@@ -263,6 +322,7 @@
 </div>
 
 <div id="msg"></div>
+<div id="potFeed"></div>
 
 <div id="powerWrap"><div id="powerLabel">POWER</div><div id="powerBar"><div id="powerFill"></div></div></div>
 
@@ -279,6 +339,19 @@
   <b>ESC</b> cancel shot &nbsp; <b>H</b> hide help
 </div>
 
+<div id="chat" class="hidden">
+  <div id="chatHead">
+    <span><span class="chatTitle">CHAT</span> <span id="chatOpp"></span></span>
+    <button id="chatToggle" aria-label="Collapse chat">&#9660;</button>
+  </div>
+  <div id="chatLog"><div class="cempty">Say hi to your opponent&hellip;</div></div>
+  <form id="chatForm" autocomplete="off">
+    <input id="chatInput" type="text" maxlength="140" placeholder="Type a message&hellip;" aria-label="Chat message">
+    <button id="chatSend" type="submit">SEND</button>
+  </form>
+</div>
+
+<button id="resetZoomBtn" class="hidden" aria-label="Reset camera zoom and height">&#8634; RESET ZOOM</button>
 <button id="settingsBtn" class="hidden" aria-label="Toggle settings" aria-expanded="false">&#9881; SETTINGS</button>
 <div id="settingsPanel" class="hidden">
   <div class="setRow">
@@ -307,13 +380,23 @@
   </div>
 </div>
 
-<div id="modeOverlay" class="overlay">
+<div id="landingOverlay" class="overlay">
+  <div class="panel" id="landingPanel">
+    <h1>&#127921; PIXEL POOL</h1>
+    <div class="sub">8-BALL</div>
+    <button class="bigBtn" id="landingLoginBtn">LOG IN</button>
+    <button class="bigBtn ghostBtn" id="landingGuestBtn">CONTINUE AS GUEST</button>
+  </div>
+</div>
+
+<div id="modeOverlay" class="overlay hidden">
   <div class="panel" id="modePanel">
     <h1>&#127921; PIXEL POOL</h1>
-    <div class="sub">8-BALL &middot; CHOOSE A MODE.</div>
+    <div class="sub" id="modeWelcome">WELCOME, PLAYER!</div>
     <button class="bigBtn" id="offlineBtn">OFFLINE</button>
     <button class="bigBtn ghostBtn" id="onlineBtn">ONLINE</button>
     <div id="modeNote"></div>
+    <button class="bigBtn ghostBtn" id="modeLogoutBtn">LOG OUT</button>
   </div>
 </div>
 
@@ -388,7 +471,7 @@
     <div id="aimRow"></div>
     <div class="styleTitle">KEYBOARD SENSITIVITY</div>
     <div id="sensRow"></div>
-    <button class="bigBtn" id="startBtn">RACK 'EM UP</button>
+    <button class="bigBtn" id="startBtn">PLAY</button>
   </div>
 </div>
 
@@ -401,22 +484,16 @@
   </div>
 </div>
 
-<div id="chooseBar" class="hidden">
-  <div id="chooseTitle">&#127923; PICK YOUR GROUP</div>
-  <div id="chooseSub">You sank a ball on the break — pick your set.</div>
-  <div class="chooseBtns">
-    <button id="chooseSolids">SOLIDS</button>
-    <button id="chooseStripes">STRIPES</button>
-  </div>
-</div>
-
 <script src="lib/three.min.js"></script>
 <script src="js/mode.js"></script>
+<script src="js/landing.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <script src="js/net.js"></script>
 <script src="js/lobby.js"></script>
 <script src="js/auth.js"></script>
+<script src="js/notify.js"></script>
 <script src="js/game.js"></script>
+<script src="js/chat.js"></script>
 <script src="js/online.js"></script>
 <script src="js/backgrounds.js"></script>
 <script src="js/aimassist.js"></script>

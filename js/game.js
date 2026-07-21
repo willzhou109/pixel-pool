@@ -56,6 +56,7 @@ scene.fog = new THREE.Fog('#171d2b', 7, 16);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 60);
 
 /* camera orbit state */
+const START_PITCH = 0.34, START_RADIUS = 0.95; // the low first-person shot view
 const cam = {
   yaw: Math.PI * 0.5, pitch: 0.72, radius: 3.4,
   target: new THREE.Vector3(0, TABLE_Y, 0),
@@ -581,23 +582,35 @@ function syncBallMeshes(dt) {
 
 /* ================================ PHYSICS =============================== */
 
-let shotEvents = { potted: [], scratch: false, firstHit: null };
+let shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
 
 function anyMoving() {
   for (const b of balls) if (!b.potted && (b.vx !== 0 || b.vz !== 0)) return true;
   return false;
 }
 
-function potBall(b) {
+function potBall(b, pocketIndex) {
   b.potted = true; b.sink = 0.25;
   b.vx = 0; b.vz = 0;
   b.mesh.position.set(b.x, BALL_Y, b.z);
   if (b.id === 0) shotEvents.scratch = true;
-  else shotEvents.potted.push(b.id);
+  else {
+    shotEvents.potted.push(b.id);
+    if (b.id === 8) shotEvents.eightPocket = pocketIndex; // for the called-shot check
+  }
   sfx.pocket();
+  announcePot(b.id);
   // Tell the watcher to sink this ball now, instead of leaving it stranded at
   // its last streamed spot until the shot's authoritative state arrives.
   if (onlineMode && myTurn()) netSend({ t: 'pot', id: b.id, x: round4(b.x), z: round4(b.z) });
+}
+
+// Fire a top-right "pocketed" popup for the current shooter. Runs on the
+// shooter's own client here; the watcher fires the same from applyPot().
+function announcePot(id) {
+  if (!window.PoolNotify) return;
+  const color = id === 0 ? null : BALL_COLORS[id > 8 ? id - 8 : id];
+  window.PoolNotify.pocket(players[turn].cfg.name, id, color);
 }
 
 function physicsStep(h) {
@@ -621,9 +634,10 @@ function physicsStep(h) {
 
     // pocket capture
     let captured = false;
-    for (const p of POCKETS) {
+    for (let pi = 0; pi < POCKETS.length; pi++) {
+      const p = POCKETS[pi];
       const dx = b.x - p.x, dz = b.z - p.z;
-      if (dx * dx + dz * dz < p.r * p.r) { potBall(b); captured = true; break; }
+      if (dx * dx + dz * dz < p.r * p.r) { potBall(b, pi); captured = true; break; }
     }
     if (captured) continue;
 
@@ -656,13 +670,13 @@ function physicsStep(h) {
     }
     // escaped through a mouth but missed the cup — drop into nearest pocket
     if (Math.abs(b.x) > PW + 0.02 || Math.abs(b.z) > PH + 0.04) {
-      let best = POCKETS[0], bd = Infinity;
-      for (const p of POCKETS) {
-        const d2 = (b.x - p.x) ** 2 + (b.z - p.z) ** 2;
-        if (d2 < bd) { bd = d2; best = p; }
+      let best = 0, bd = Infinity;
+      for (let pi = 0; pi < POCKETS.length; pi++) {
+        const d2 = (b.x - POCKETS[pi].x) ** 2 + (b.z - POCKETS[pi].z) ** 2;
+        if (d2 < bd) { bd = d2; best = pi; }
       }
-      b.x = best.x; b.z = best.z;
-      potBall(b);
+      b.x = POCKETS[best].x; b.z = POCKETS[best].z;
+      potBall(b, best);
     }
   }
 
@@ -802,6 +816,15 @@ const placeGhost = new THREE.Mesh(ballGeo,
 placeGhost.visible = false;
 scene.add(placeGhost);
 
+// Gold ring that marks the pocket called for an 8-ball shot. Lives on the scene
+// (not the table group) so it survives table-style rebuilds.
+const callMarker = new THREE.Mesh(
+  new THREE.TorusGeometry(0.066, 0.012, 8, 22),
+  new THREE.MeshStandardMaterial({ color: '#f5c518', emissive: '#f5c518', emissiveIntensity: 0.75, flatShading: true }));
+callMarker.rotation.x = -Math.PI / 2;
+callMarker.visible = false;
+scene.add(callMarker);
+
 /* aim ray: first hit against balls (ghost-ball contact) or cushion planes */
 function castAim(px, pz, dx, dz) {
   let bestT = Infinity, hitBall = null;
@@ -883,10 +906,11 @@ function updateAimVisuals() {
 
 /* ============================== GAME STATE ============================== */
 
-const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CHOOSING: 6 };
+const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CALLING: 6 };
 let state = S.SETUP;
 let turn = 0;
 let breakShot = false;        // true until the opening break has been resolved
+let calledPocket = -1;        // pocket index nominated for an 8-ball shot (-1 = none)
 let chargePull = 0;
 let striking = false;      // strike animation in progress
 let placeValid = false;
@@ -922,6 +946,14 @@ function myTurn() { return !onlineMode || turn === mySeat; }
 function watching() { return onlineMode && turn !== mySeat; }
 function netSend(msg) { if (onlineMode && netSink) netSink(msg); }
 
+// ---- online-aware messaging (say "You" from each client's perspective) ----
+// Online: true if `seat` is the local player. Offline (hotseat) is never "you".
+function isMe(seat) { return onlineMode && seat === mySeat; }
+function endTitleFor(winner) {
+  if (!onlineMode) return `🏆 ${players[winner].cfg.name} wins!`;
+  return winner === mySeat ? '🏆 YOU WON!' : '😞 YOU LOST';
+}
+
 function remaining(group) {
   const lo = group === 'solid' ? 1 : 9, hi = group === 'solid' ? 7 : 15;
   let n = 0;
@@ -930,6 +962,34 @@ function remaining(group) {
 }
 
 function groupOf(id) { return id < 8 ? 'solid' : 'stripe'; }
+
+// A seat is "on the 8" once its group is cleared and the 8 is still on the table.
+function isOnEight(seat) {
+  const g = players[seat].group;
+  return !!g && remaining(g) === 0 && !balls[8].potted;
+}
+// Show/hide the gold ring on the called pocket (or clear with -1).
+function setCalledPocket(i) {
+  calledPocket = i;
+  if (i >= 0) {
+    const p = POCKETS[i];
+    callMarker.position.set(p.x, TABLE_Y + 0.02, p.z);
+    callMarker.visible = true;
+  } else {
+    callMarker.visible = false;
+  }
+}
+// Open the shooter's turn: nominate a pocket first if they're on the 8-ball,
+// otherwise go straight to aiming. Resets any previous pocket call.
+function enterAim() {
+  setCalledPocket(-1);
+  if (myTurn() && isOnEight(turn)) {
+    state = S.CALLING;
+    cam.radius = 2.2; cam.pitch = 0.85; // pull back so every pocket is easy to tap
+  } else {
+    state = S.AIM;
+  }
+}
 
 /* ------------------------------- shooting ------------------------------ */
 
@@ -950,7 +1010,7 @@ function fire(power) {
     if (t >= 1) {
       striking = false;
       stick.visible = false;
-      shotEvents = { potted: [], scratch: false, firstHit: null };
+      shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
       const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
       cue.vx = d.x * speed;
       cue.vz = d.y * speed;
@@ -972,8 +1032,23 @@ function resolveShot() {
   const potted8 = potted.includes(8);
   const wasBreak = breakShot; breakShot = false;
 
-  if (potted8) {
-    // count remaining BEFORE this shot isn't needed: if group cleared now, 8 was last
+  // A called 8-ball shot (the shooter was on the 8 and nominated a pocket).
+  if (calledPocket >= 0) {
+    // Pocketing the cue ball and the 8 on the same stroke loses, whichever
+    // pocket the 8 found. But a scratch with the 8 left standing is NOT a loss
+    // under WPA rules — it's just a foul: play continues and the opponent gets
+    // ball-in-hand, so it falls through to the foul handling below.
+    if (scratch && potted8) return endGame(1 - turn, `${me.cfg.name} pocketed the cue ball with the 8.`);
+    if (potted8) {
+      return shotEvents.eightPocket === calledPocket
+        ? endGame(turn, `${me.cfg.name} sank the 8-ball in the called pocket!`)
+        : endGame(1 - turn, `${me.cfg.name} sank the 8-ball in the wrong pocket.`);
+    }
+    // 8 stayed up: a scratch becomes a ball-in-hand foul, a clean miss just
+    // passes the turn — both handled below.
+  } else if (potted8) {
+    // 8 dropped while balls of the group remained, or on the very shot the group
+    // cleared. Same-shot clear counts as a clean finish; otherwise it's a loss.
     const clearedOwn = me.group && remaining(me.group) === 0;
     if (clearedOwn && !scratch) {
       return endGame(turn, `${me.cfg.name} sank the 8-ball. Clean finish!`);
@@ -988,29 +1063,31 @@ function resolveShot() {
   // Note: groupOf(8) reports 'stripe', so the 8 must be excluded explicitly —
   // otherwise hitting it first would look legal to the stripes player.
   const first = shotEvents.firstHit;
-  const onEight = me.group && remaining(me.group) === 0;
+  // Was the shooter already down to just the 8 BEFORE this shot? Use the pre-shot
+  // count (add back this shot's own-group pots), otherwise sinking the last group
+  // ball drops remaining() to 0 and the legal hit reads as an illegal 8-first.
+  const ownPotted = me.group ? potted.filter(id => id !== 8 && groupOf(id) === me.group).length : 0;
+  const wasOnEight = me.group && remaining(me.group) + ownPotted === 0;
   const legalContact = first !== null && (
-    onEight ? first === 8
+    wasOnEight ? first === 8
       : me.group ? (first !== 8 && groupOf(first) === me.group)
         : first !== 8);
   const foul = scratch || !legalContact;
 
-  // Sinking a ball on a clean break lets the breaker pick their group instead
-  // of it being decided by whichever ball happened to drop.
-  if (wasBreak && !foul && !me.group && potted.some(id => id !== 8)) {
-    state = S.CHOOSING;
-    showGroupChoice(potted);
-    updateHUD();
-    return; // turn stays with the breaker; group is set when they pick
-  }
-
-  // group assignment on first legal pot
-  if (!me.group && !foul) {
-    const firstPot = potted.find(id => id !== 8);
-    if (firstPot != null) {
-      me.group = groupOf(firstPot);
+  // Group assignment. The table stays open through the break, and a set is
+  // assigned only when every object ball dropped on a single legal shot belongs
+  // to the same group (the 8 never counts). Sink a solid AND a stripe together —
+  // or pot anything on the break — and both players stay "no group yet" until
+  // someone sinks from just one group.
+  if (!me.group && !foul && !wasBreak) {
+    const objectPots = potted.filter(id => id !== 8);
+    const hasSolid = objectPots.some(id => id < 8);
+    const hasStripe = objectPots.some(id => id > 8);
+    if (hasSolid !== hasStripe) { // exactly one group present
+      me.group = hasSolid ? 'solid' : 'stripe';
       opp.group = me.group === 'solid' ? 'stripe' : 'solid';
-      toast(`${me.cfg.name} is ${me.group === 'solid' ? 'SOLIDS' : 'STRIPES'}`);
+      const grp = me.group === 'solid' ? 'SOLIDS' : 'STRIPES';
+      toast(isMe(turn) ? `You're ${grp}` : `${me.cfg.name} is ${grp}`);
     }
   }
 
@@ -1020,54 +1097,31 @@ function resolveShot() {
   if (foul) {
     turn = 1 - turn;
     cue.vx = 0; cue.vz = 0;
+    setCalledPocket(-1); // clear any stale 8-ball call from the fouling player
     lastFoul = scratch
       ? `Scratch! ${players[turn].cfg.name}: place the cue ball`
-      : `Foul — ${first === null ? 'no ball hit' : 'wrong ball first'}! ${players[turn].cfg.name}: ball in hand`;
-    toast(lastFoul);
+      : `Foul — ${first === null ? 'no contact' : 'incorrect first contact'}! ${players[turn].cfg.name}: ball in hand`;
+    if (myTurn()) pinToast(lastFoul); else toast(lastFoul);
     state = S.PLACING;
   } else {
     if (!keepTurn) turn = 1 - turn;
-    else toast(`${me.cfg.name} shoots again`);
-    state = S.AIM;
+    enterAim(); // S.CALLING if the next shooter is on the 8-ball, else S.AIM
+    if (state === S.CALLING) {
+      const callMsg = isMe(turn)
+        ? `Only the 8-ball left — tap the pocket you'll call`
+        : `Only the 8-ball left — ${players[turn].cfg.name}: tap the pocket you'll call`;
+      if (myTurn()) pinToast(callMsg); else toast(callMsg, 30000);
+    } else if (keepTurn) {
+      toast(isMe(turn) ? 'You shoot again' : `${me.cfg.name} shoots again`);
+    }
   }
   updateHUD();
 }
 
-/* ---- break: let the breaker choose solids or stripes ---- */
-// A compact top bar (not a modal), so the table stays lit and the camera stays
-// free — the breaker can orbit/zoom to survey the spread before deciding.
-const chooseBar = document.getElementById('chooseBar');
-function showGroupChoice(potted) {
-  const s = potted.filter(id => id < 8).length;
-  const st = potted.filter(id => id > 8).length;
-  const parts = [];
-  if (s) parts.push(`${s} solid${s > 1 ? 's' : ''}`);
-  if (st) parts.push(`${st} stripe${st > 1 ? 's' : ''}`);
-  document.getElementById('chooseSub').textContent =
-    `You sank ${parts.join(' & ')} on the break — pick your set.`;
-  chooseBar.classList.remove('hidden');
-  // Pull back to an angled overview so the whole table is visible; the player
-  // can still orbit/zoom from here.
-  cam.radius = 2.6; cam.pitch = 0.9;
-}
-function chooseGroup(g) {
-  if (state !== S.CHOOSING) return;
-  const me = players[turn], opp = players[1 - turn];
-  me.group = g;
-  opp.group = g === 'solid' ? 'stripe' : 'solid';
-  chooseBar.classList.add('hidden');
-  toast(`${me.cfg.name} is ${g === 'solid' ? 'SOLIDS' : 'STRIPES'} — shoot again`);
-  state = S.AIM;
-  updateHUD();
-  if (onlineMode) netSend({ t: 'group', g: [players[0].group, players[1].group] });
-}
-document.getElementById('chooseSolids').addEventListener('click', () => chooseGroup('solid'));
-document.getElementById('chooseStripes').addEventListener('click', () => chooseGroup('stripe'));
-
 function endGame(winner, reason) {
   state = S.END;
   lastEnd = { winner, reason };
-  document.getElementById('endTitle').textContent = `🏆 ${players[winner].cfg.name} wins!`;
+  document.getElementById('endTitle').textContent = endTitleFor(winner);
   document.getElementById('endReason').textContent = reason;
   document.getElementById('endOverlay').classList.remove('hidden');
   updateHUD();
@@ -1080,9 +1134,11 @@ function startMatch() {
   players[1].group = null;
   turn = 0;
   rackBalls();
-  shotEvents = { potted: [], scratch: false, firstHit: null };
+  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+  setCalledPocket(-1);
+  pinnedMsg = null; // clear any prompt pinned from a previous game
   state = S.AIM;
-  cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95; // first-person: low, just behind the cue ball
+  cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS; // first-person: low, just behind the cue ball
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
   if (window.SettingsPanel) window.SettingsPanel.show();
@@ -1152,14 +1208,13 @@ function apply(msg) {
   else if (msg.t === 'snap') applySnap(msg);
   else if (msg.t === 'pot') applyPot(msg);
   else if (msg.t === 'setup') applySetup(msg);
-  else if (msg.t === 'group') applyGroup(msg);
+  else if (msg.t === 'call') applyCall(msg);
   else if (msg.t === 'state') applyState(msg);
 }
-function applyGroup(msg) {
-  players[0].group = msg.g[0];
-  players[1].group = msg.g[1];
-  updateHUD();
-  toast(`${players[turn].cfg.name} is ${players[turn].group === 'solid' ? 'SOLIDS' : 'STRIPES'}`);
+// Opponent nominated a pocket for their 8-ball shot — show the same marker.
+function applyCall(msg) {
+  setCalledPocket(msg.p);
+  toast(`${players[turn].cfg.name} called a pocket for the 8-ball.`);
 }
 function applyAim(msg) {
   remoteAim = { yaw: msg.yaw, pull: msg.pull || 0, cx: msg.cx, cz: msg.cz };
@@ -1211,6 +1266,7 @@ function applyPot(msg) {
   if (msg.x != null) { b.x = msg.x; b.z = msg.z; b.mesh.position.set(b.x, BALL_Y, b.z); }
   b.potted = true; b.sink = 0.25; b.vx = b.vz = 0;
   sfx.pocket();
+  announcePot(msg.id);
 }
 function applyState(msg) {
   for (const [id, x, z, potted] of msg.b) {
@@ -1223,16 +1279,23 @@ function applyState(msg) {
   players[1].group = msg.groups[1];
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; wasMoving = false; lastAimKey = '';
+  setCalledPocket(-1); // a new shot begins; any previous 8-ball call is cleared
+  breakShot = false;   // the opponent has resolved a shot, so the break is over
   updateHUD();
 
   if (msg.phase === 'end') {
     state = S.END; lastEnd = { winner: msg.winner, reason: msg.reason };
-    document.getElementById('endTitle').textContent = `🏆 ${players[msg.winner].cfg.name} wins!`;
+    document.getElementById('endTitle').textContent = endTitleFor(msg.winner);
     document.getElementById('endReason').textContent = msg.reason || '';
     document.getElementById('endOverlay').classList.remove('hidden');
   } else if (msg.phase === 'place') {
     state = S.PLACING;
-    toast(myTurn() ? 'Ball in hand — place the cue ball' : (msg.foul || `${players[turn].cfg.name} fouled`));
+    if (myTurn()) pinToast('Ball in hand — place the cue ball');
+    else toast(msg.foul || `${players[turn].cfg.name} fouled`);
+  } else if (myTurn() && isOnEight(turn)) {
+    state = S.CALLING;
+    cam.radius = 2.2; cam.pitch = 0.85;
+    pinToast(`Only the 8-ball left — tap the pocket you'll call`);
   } else {
     state = S.AIM;
     toast(myTurn() ? 'Your turn' : `${players[turn].cfg.name}'s turn`);
@@ -1306,13 +1369,15 @@ function startOnline(opts) {
   players[0].group = players[1].group = null;
   turn = 0;                        // seat 0 = breaker
   rackBalls();
-  shotEvents = { potted: [], scratch: false, firstHit: null };
+  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; lastEnd = null; lastAimKey = '';
+  setCalledPocket(-1);
+  pinnedMsg = null; // clear any prompt pinned from a previous game
   state = S.AIM; wasMoving = false;
-  cam.yaw = -Math.PI / 2; cam.pitch = 0.34; cam.radius = 0.95;
+  cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS;
 
-  ['modeOverlay', 'loginOverlay', 'signupOverlay', 'lobbyOverlay', 'setupOverlay', 'endOverlay']
+  ['landingOverlay', 'modeOverlay', 'loginOverlay', 'signupOverlay', 'lobbyOverlay', 'setupOverlay', 'endOverlay']
     .forEach(id => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
@@ -1330,7 +1395,7 @@ function startOnline(opts) {
   if (mySeat === 0) sendSetup();
 
   toast(myTurn()
-    ? `You break, ${players[mySeat].cfg.name}! Drag back from the cue ball.`
+    ? `You break! Drag back from the cue ball to shoot.`
     : `${players[turn].cfg.name} breaks — watch for your turn.`);
 }
 
@@ -1339,7 +1404,7 @@ function endOnline() {
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false;
   document.getElementById('endOverlay').classList.add('hidden');
-  chooseBar.classList.add('hidden');
+  setCalledPocket(-1);
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('help').classList.add('hidden');
   if (window.SettingsPanel) window.SettingsPanel.hide();
@@ -1358,11 +1423,35 @@ window.PoolNetGame = {
 
 const msgEl = document.getElementById('msg');
 let msgTimer = null;
+let pinnedMsg = null; // a prompt that must stay up until the player acts (place/call)
+
 function toast(text, ms = 2600) {
   msgEl.textContent = text;
   msgEl.classList.add('show');
   clearTimeout(msgTimer);
-  msgTimer = setTimeout(() => msgEl.classList.remove('show'), ms);
+  msgTimer = setTimeout(() => {
+    // A transient toast shown on top of a pinned prompt restores it on expiry,
+    // so the "place the cue ball" / "call a pocket" instruction never vanishes
+    // while the player still owes that action.
+    if (pinnedMsg !== null) msgEl.textContent = pinnedMsg;
+    else msgEl.classList.remove('show');
+  }, ms);
+}
+
+// Pin an instruction that stays visible until the player performs the required
+// action. unpinToast() releases it (and lets the current text fade normally).
+function pinToast(text) {
+  pinnedMsg = text;
+  msgEl.textContent = text;
+  msgEl.classList.add('show');
+  clearTimeout(msgTimer);
+}
+
+function unpinToast() {
+  if (pinnedMsg === null) return;
+  pinnedMsg = null;
+  clearTimeout(msgTimer);
+  msgTimer = setTimeout(() => msgEl.classList.remove('show'), 2600);
 }
 
 function updateHUD() {
@@ -1396,11 +1485,21 @@ function updateHUD() {
     }
   }
   document.getElementById('turnBadge').textContent =
-    state === S.END ? 'Game over' : `${players[turn].cfg.name}'s turn`;
+    state === S.END ? 'Game over'
+      : isMe(turn) ? 'Your turn'
+        : `${players[turn].cfg.name}'s turn`;
 }
 
 const powerWrap = document.getElementById('powerWrap');
 const powerFill = document.getElementById('powerFill');
+
+// Reset the camera zoom + height to the opening shot view (keeping the current
+// facing direction so the player's aim isn't spun around).
+function resetZoom() {
+  cam.pitch = START_PITCH;
+  cam.radius = START_RADIUS;
+}
+document.getElementById('resetZoomBtn').addEventListener('click', resetZoom);
 
 /* ----------------------------- setup screen ---------------------------- */
 
@@ -1500,6 +1599,10 @@ canvas.addEventListener('pointerdown', e => {
     updatePlaceGhost(e.clientX, e.clientY);
     return;
   }
+  if (state === S.CALLING) {
+    ptr.mode = 'call'; // tap a pocket to nominate it; dragging orbits the camera
+    return;
+  }
   if (state === S.AIM) {
     const sp = screenPosOfCue();
     const dist = Math.hypot(e.clientX - sp.x, e.clientY - sp.y);
@@ -1521,6 +1624,7 @@ canvas.addEventListener('pointermove', e => {
   const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
 
   if (ptr.mode === 'orbit') {
+    ptr.moved += Math.abs(dx) + Math.abs(dy);
     cam.yaw -= dx * 0.005;
     cam.pitch += dy * 0.005;
     ptr.x = e.clientX; ptr.y = e.clientY;
@@ -1532,6 +1636,13 @@ canvas.addEventListener('pointermove', e => {
     }
     ptr.x = e.clientX; ptr.y = e.clientY;
     updatePlaceGhost(e.clientX, e.clientY);
+  } else if (ptr.mode === 'call') {
+    ptr.moved += Math.abs(dx) + Math.abs(dy);
+    if (ptr.moved > 8) { // it's a drag: orbit the camera to survey the table
+      cam.yaw -= dx * 0.005;
+      cam.pitch += dy * 0.005;
+    }
+    ptr.x = e.clientX; ptr.y = e.clientY;
   } else if (ptr.mode === 'charge') {
     // pull = drag along the screen-space "backward" direction of the aim
     const d = aimDir();
@@ -1567,10 +1678,35 @@ canvas.addEventListener('pointerup', e => {
       cue.mesh.visible = true; cue.mesh.scale.setScalar(1);
       placeGhost.visible = false;
       canvas.classList.remove('placing');
-      state = S.AIM;
-      toast(`${players[turn].cfg.name}'s shot`);
+      enterAim();
+      unpinToast(); // the ball is placed; release the "place the cue ball" prompt
+      // If the shooter is down to the 8-ball, placing hands straight over to the
+      // pocket-call, which is itself a pinned prompt.
+      if (state === S.CALLING) pinToast(`Only the 8-ball left — tap the pocket you'll call`);
+      else toast(`${players[turn].cfg.name}'s shot`);
     } else {
       toast('Can’t place there — pick an open spot on the felt');
+    }
+  } else if (ptr.mode === 'call') {
+    if (ptr.moved > 8) { ptr.mode = null; return; } // was an orbit drag, not a tap
+    const pi = pocketAtPointer(e.clientX, e.clientY);
+    if (pi >= 0) {
+      setCalledPocket(pi);
+      state = S.AIM;
+      resetZoom(); // drop from the survey view back to the low first-person shot POV
+      unpinToast(); // the pocket is chosen; release the "call a pocket" prompt
+      toast('Pocket called — sink the 8-ball there.');
+      if (onlineMode) netSend({ t: 'call', p: pi });
+    } else {
+      toast('Tap directly on a pocket to call your shot.');
+    }
+  } else if (ptr.mode === 'orbit' && ptr.moved <= 8 && state === S.AIM && myTurn() && isOnEight(turn)) {
+    // A tap (not a drag) on a pocket while aiming the 8-ball re-nominates it.
+    const pi = pocketAtPointer(e.clientX, e.clientY);
+    if (pi >= 0 && pi !== calledPocket) {
+      setCalledPocket(pi);
+      toast('Pocket re-called.');
+      if (onlineMode) netSend({ t: 'call', p: pi });
     }
   }
   ptr.mode = null;
@@ -1633,6 +1769,25 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 /* ball-in-hand ghost placement */
 const rc = new THREE.Raycaster();
 const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -BALL_Y);
+
+// Which pocket a screen tap lands on for the 8-ball call, or -1 if the tap
+// wasn't close enough to any pocket.
+function pocketAtPointer(cx, cy) {
+  const ndc = new THREE.Vector2(
+    (cx / canvas.clientWidth) * 2 - 1,
+    -(cy / canvas.clientHeight) * 2 + 1
+  );
+  rc.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!rc.ray.intersectPlane(tablePlane, hit)) return -1;
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < POCKETS.length; i++) {
+    const d2 = (hit.x - POCKETS[i].x) ** 2 + (hit.z - POCKETS[i].z) ** 2;
+    if (d2 < bd) { bd = d2; best = i; }
+  }
+  return bd < 0.18 * 0.18 ? best : -1;
+}
+
 function updatePlaceGhost(cx, cy) {
   const ndc = new THREE.Vector2(
     (cx / canvas.clientWidth) * 2 - 1,
@@ -1728,6 +1883,7 @@ requestAnimationFrame(frame);
 /* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break */
 const q = new URLSearchParams(location.search);
 if (q.has('autostart')) {
+  document.getElementById('landingOverlay').classList.add('hidden');
   document.getElementById('modeOverlay').classList.add('hidden');
   document.getElementById('setupOverlay').classList.add('hidden');
   startMatch();

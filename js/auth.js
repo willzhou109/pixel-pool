@@ -42,14 +42,22 @@
 
   /* ------------------------------ navigation ----------------------------- */
   const only = elm => {
-    [el.mode, el.login, el.signup, el.lobby].forEach(o => o && o.classList.add('hidden'));
+    [el.login, el.signup, el.lobby].forEach(o => o && o.classList.add('hidden'));
+    document.getElementById('landingOverlay').classList.add('hidden');
+    document.getElementById('modeOverlay').classList.add('hidden');
     if (elm) elm.classList.remove('hidden');
   };
   const clearErrors = () => { el.loginErr.textContent = ''; el.signupErr.textContent = ''; };
 
   function showLogin()  { only(el.login);  clearErrors(); el.loginUser.focus(); }
   function showSignup() { only(el.signup); clearErrors(); el.signupUser.focus(); }
-  function showMode()   { only(el.mode); }
+  // Back out of login/signup to the very first screen.
+  function showLanding() {
+    if (window.PixelPoolLanding) window.PixelPoolLanding.show();
+  }
+  function showHome(username) {
+    if (window.PixelPoolMode) window.PixelPoolMode.enter(username, false);
+  }
   function showLobby(username) {
     el.lobbyUser.textContent = (username || 'PLAYER').toUpperCase();
     only(el.lobby);
@@ -57,8 +65,10 @@
     if (window.PixelPoolLobby) window.PixelPoolLobby.activate(username, getToken());
   }
 
-  // Entry point used by mode.js when ONLINE is clicked. If we already hold a
-  // valid session, skip straight to the lobby; otherwise show the login page.
+  // Entry point used by mode.js's ONLINE button. We only get here once
+  // already logged in (guests are turned away before this is called), so a
+  // valid session should already exist; fall back to the login form if it
+  // somehow doesn't (e.g. the token expired since the home screen loaded).
   async function openOnline() {
     const token = getToken();
     if (!token) return showLogin();
@@ -68,6 +78,11 @@
     } catch { /* server unreachable — fall through to the login form */ }
     clearSession();
     showLogin();
+  }
+
+  function logout() {
+    if (window.PixelPoolLobby) window.PixelPoolLobby.deactivate();
+    clearSession();
   }
 
   /* -------------------------------- requests ----------------------------- */
@@ -98,7 +113,7 @@
       if (!ok) { errEl.textContent = data.error || 'Something went wrong.'; return; }
       setSession(data.token, data.username);
       passEl.value = '';
-      showLobby(data.username);
+      showHome(data.username);
     } catch {
       errEl.textContent = 'Can\'t reach the server. Is it running (localhost:3000)?';
     } finally {
@@ -120,13 +135,13 @@
 
   el.toSignup.addEventListener('click', showSignup);
   el.toLogin.addEventListener('click', showLogin);
-  el.loginBack.addEventListener('click', showMode);
-  el.signupBack.addEventListener('click', showMode);
+  el.loginBack.addEventListener('click', showLanding);
+  el.signupBack.addEventListener('click', showLanding);
+  // Lobby "LOG OUT": drop the socket + session and return to the landing screen.
   el.logoutBtn.addEventListener('click', () => {
-    if (window.PixelPoolLobby) window.PixelPoolLobby.deactivate();
-    clearSession();
-    showMode();
+    logout();
+    showLanding();
   });
 
-  window.PixelPoolAuth = { openOnline };
+  window.PixelPoolAuth = { openOnline, showLogin, logout };
 })();

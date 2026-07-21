@@ -10,6 +10,7 @@
 
   const Net = window.PixelPoolNet;
   const Game = window.PoolNetGame;
+  const Chat = window.PixelPoolChat;
   if (!Net || !Game) { console.warn('Online: missing PixelPoolNet / PoolNetGame'); return; }
 
   let inMatch = false;
@@ -24,6 +25,7 @@
 
   function toLobby(note) {
     inMatch = false;
+    if (Chat) Chat.hide();
     Game.endOnline();
     if (window.PixelPoolLobby) window.PixelPoolLobby.backToIdle(note);
   }
@@ -39,10 +41,15 @@
     const seat = data.youBreak ? 0 : 1;
     const names = seat === 0 ? [myName(), data.opponent] : [data.opponent, myName()];
     Game.startOnline({ mySeat: seat, names, seed: data.seed });
+    if (Chat) Chat.show(data.opponent);
   });
 
-  // In-match gameplay messages from the opponent.
-  Net.on('game', msg => Game.apply(msg));
+  // In-match gameplay messages from the opponent. Chat rides the same channel
+  // but isn't game state, so it's peeled off here and never reaches apply().
+  Net.on('game', msg => {
+    if (msg && msg.t === 'chat') { if (Chat) Chat.receive(msg.text); return; }
+    Game.apply(msg);
+  });
 
   // Opponent bailed, or our own connection dropped mid-match → back to lobby.
   Net.on('opponent-left', () => { if (inMatch) toLobby('Opponent left the match.'); });
