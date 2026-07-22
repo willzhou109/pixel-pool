@@ -69,6 +69,17 @@
     overlay.classList.remove('hidden');
   }
 
+  // Return to the home panel from elsewhere (e.g. the in-game QUIT button)
+  // without re-running enter()'s welcome/profile setup, which is already in
+  // place from login.
+  function showHome() {
+    [$('landingOverlay'), $('loginOverlay'), $('signupOverlay'), $('lobbyOverlay'), setupOverlay]
+      .forEach(o => o && o.classList.add('hidden'));
+    if (profileMain) profileMain.classList.add('hidden');
+    if (homeMain) homeMain.classList.remove('hidden');
+    overlay.classList.remove('hidden');
+  }
+
   /* ------------------------------ game tabs ------------------------------ */
   // Only 8-ball is playable; the rest flash a "coming soon" note and leave the
   // selection on 8-ball.
@@ -144,5 +155,5 @@
     homeChatToggle.innerHTML = collapsed ? '&#9650;' : '&#9660;';
   });
 
-  window.PixelPoolMode = { enter };
+  window.PixelPoolMode = { enter, showHome };
 })();

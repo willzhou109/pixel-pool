@@ -995,6 +995,9 @@ function enterAim() {
 
 function fire(power) {
   const d = aimDir();
+  // Play-by-play: freeze the pre-shot layout + shot direction for the recap's
+  // LAYOUT tab (js/stats.js pairs this with the post-shot layout at resolve).
+  if (window.MatchStats) window.MatchStats.beginShot(statsLayout(), { x: round4(d.x), z: round4(d.y) });
   const pull0 = chargePull;
   chargePull = 0;
   state = S.ROLLING;
@@ -1025,12 +1028,44 @@ function fire(power) {
 
 /* ---------------------------- shot resolution --------------------------- */
 
+// Compact table layout for the recap play-by-play (js/stats.js): one row per
+// ball, same shape as serializeState()'s ball list.
+function statsLayout() {
+  return balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]);
+}
+
 function resolveShot() {
   const me = players[turn], opp = players[1 - turn];
   const potted = shotEvents.potted;
   const scratch = shotEvents.scratch;
   const potted8 = potted.includes(8);
   const wasBreak = breakShot; breakShot = false;
+
+  // Contact legality, classified up front (before the game-ending early
+  // returns below) so the stats recorder sees every stroke. The cue ball's
+  // first strike must be a ball of the shooter's group — any ball but the 8 on
+  // an open table, or the 8 itself once the group is cleared. Touching nothing
+  // at all is a foul too.
+  // Note: groupOf(8) reports 'stripe', so the 8 must be excluded explicitly —
+  // otherwise hitting it first would look legal to the stripes player.
+  const first = shotEvents.firstHit;
+  // Was the shooter already down to just the 8 BEFORE this shot? Use the pre-shot
+  // count (add back this shot's own-group pots), otherwise sinking the last group
+  // ball drops remaining() to 0 and the legal hit reads as an illegal 8-first.
+  const ownPotted = me.group ? potted.filter(id => id !== 8 && groupOf(id) === me.group).length : 0;
+  const wasOnEight = me.group && remaining(me.group) + ownPotted === 0;
+  const legalContact = first !== null && (
+    wasOnEight ? first === 8
+      : me.group ? (first !== 8 && groupOf(first) === me.group)
+        : first !== 8);
+  const foul = scratch || !legalContact;
+
+  // Stats: log the stroke. "Balls pocketed" counts the shooter's own group
+  // only (every object ball but the 8 while the table is still open).
+  if (window.MatchStats) window.MatchStats.recordShot(turn,
+    me.group ? ownPotted : potted.filter(id => id !== 8).length,
+    scratch ? 'scratch' : first === null ? 'noContact' : !legalContact ? 'wrongBall' : null,
+    statsLayout());
 
   // A called 8-ball shot (the shooter was on the 8 and nominated a pocket).
   if (calledPocket >= 0) {
@@ -1056,23 +1091,6 @@ function resolveShot() {
     const why = scratch ? 'scratched while sinking the 8-ball' : 'sank the 8-ball too early';
     return endGame(1 - turn, `${me.cfg.name} ${why}.`);
   }
-
-  // Illegal-first-contact foul. The cue ball's first strike must be a ball of
-  // the shooter's group — any ball but the 8 on an open table, or the 8 itself
-  // once the group is cleared. Touching nothing at all is a foul too.
-  // Note: groupOf(8) reports 'stripe', so the 8 must be excluded explicitly —
-  // otherwise hitting it first would look legal to the stripes player.
-  const first = shotEvents.firstHit;
-  // Was the shooter already down to just the 8 BEFORE this shot? Use the pre-shot
-  // count (add back this shot's own-group pots), otherwise sinking the last group
-  // ball drops remaining() to 0 and the legal hit reads as an illegal 8-first.
-  const ownPotted = me.group ? potted.filter(id => id !== 8 && groupOf(id) === me.group).length : 0;
-  const wasOnEight = me.group && remaining(me.group) + ownPotted === 0;
-  const legalContact = first !== null && (
-    wasOnEight ? first === 8
-      : me.group ? (first !== 8 && groupOf(first) === me.group)
-        : first !== 8);
-  const foul = scratch || !legalContact;
 
   // Group assignment. The table stays open through the break, and a set is
   // assigned only when every object ball dropped on a single legal shot belongs
@@ -1118,14 +1136,39 @@ function resolveShot() {
   updateHUD();
 }
 
+// Clear the finished match's leftover ball layout so the scene behind the
+// end-of-game overlay shows a fresh rack, not whatever state the last shot
+// left on the felt. Table style and background are left as the players chose.
+function resetSceneAfterGame() {
+  rackBalls();
+  document.getElementById('help').classList.add('hidden');
+}
+
 function endGame(winner, reason) {
   state = S.END;
   lastEnd = { winner, reason };
+  if (window.MatchStats) window.MatchStats.finalize(winner, reason);
   document.getElementById('endTitle').textContent = endTitleFor(winner);
   document.getElementById('endReason').textContent = reason;
   document.getElementById('endOverlay').classList.remove('hidden');
+  resetSceneAfterGame();
   updateHUD();
 }
+
+// Concede the match (the FORFEIT button in the settings panel, js/settings.js).
+// Offline the current shooter concedes — it's hot-seat, so whoever holds the
+// table gives it up; online it's always the local seat, and the result rides
+// the usual authoritative 'state' message so the opponent's client shows the
+// same end screen (see applyState's 'end' phase).
+function forfeit() {
+  if (state === S.SETUP || state === S.END) return;
+  const loser = onlineMode ? mySeat : turn;
+  for (const b of balls) { b.vx = 0; b.vz = 0; } // halt any mid-shot motion
+  unpinToast(); // release any "place the cue ball" / "call a pocket" prompt
+  endGame(1 - loser, `${players[loser].cfg.name} forfeited the match.`);
+  if (onlineMode) netSend(serializeState('end'));
+}
+window.PoolMatch = { forfeit };
 
 function startMatch() {
   onlineMode = false;          // local match: full control, random rack
@@ -1133,6 +1176,7 @@ function startMatch() {
   players[0].group = null;
   players[1].group = null;
   turn = 0;
+  if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
   rackBalls();
   shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
   setCalledPocket(-1);
@@ -1184,6 +1228,9 @@ function serializeState(phase) {
     groups: [players[0].group, players[1].group],
     b: balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]),
   };
+  // Running match-stats tally rides along so the watcher's recap stays in sync
+  // (only the resolving client mutates it — see js/stats.js).
+  if (window.MatchStats) msg.stats = window.MatchStats.snapshot();
   if (phase === 'end' && lastEnd) { msg.winner = lastEnd.winner; msg.reason = lastEnd.reason; }
   if (phase === 'place') msg.foul = lastFoul;
   return msg;
@@ -1277,6 +1324,7 @@ function applyState(msg) {
   turn = msg.turn;
   players[0].group = msg.groups[0];
   players[1].group = msg.groups[1];
+  if (msg.stats && window.MatchStats) window.MatchStats.applyRemote(msg.stats);
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; wasMoving = false; lastAimKey = '';
   setCalledPocket(-1); // a new shot begins; any previous 8-ball call is cleared
@@ -1285,9 +1333,11 @@ function applyState(msg) {
 
   if (msg.phase === 'end') {
     state = S.END; lastEnd = { winner: msg.winner, reason: msg.reason };
+    if (window.MatchStats) window.MatchStats.finalize(msg.winner, msg.reason);
     document.getElementById('endTitle').textContent = endTitleFor(msg.winner);
     document.getElementById('endReason').textContent = msg.reason || '';
     document.getElementById('endOverlay').classList.remove('hidden');
+    resetSceneAfterGame();
   } else if (msg.phase === 'place') {
     state = S.PLACING;
     if (myTurn()) pinToast('Ball in hand — place the cue ball');
@@ -1368,6 +1418,7 @@ function startOnline(opts) {
   players[1].cfg.name = opts.names[1];
   players[0].group = players[1].group = null;
   turn = 0;                        // seat 0 = breaker
+  if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
   rackBalls();
   shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
@@ -1542,16 +1593,18 @@ document.getElementById('rematchBtn').addEventListener('click', () => {
   if (onlineMode) { if (netExit) netExit(); return; } // online: back to lobby
   startMatch();
 });
-document.getElementById('changeBtn').addEventListener('click', () => {
+document.getElementById('quitBtn').addEventListener('click', () => {
   document.getElementById('endOverlay').classList.add('hidden');
-  if (onlineMode) { if (netExit) netExit(); return; } // online: back to lobby
-  document.getElementById('hud').classList.add('hidden');
-  if (window.SettingsPanel) window.SettingsPanel.hide();
-  buildSetupUI();
-  document.getElementById('setupOverlay').classList.remove('hidden');
-  state = S.SETUP;
-  cam.goal.set(0, TABLE_Y, 0);
-  cam.radius = 3.2; cam.pitch = 0.5;
+  if (onlineMode) {
+    if (netExit) netExit(); // leaves the match; endOnline() handles hud/settings/camera
+  } else {
+    document.getElementById('hud').classList.add('hidden');
+    if (window.SettingsPanel) window.SettingsPanel.hide();
+    state = S.SETUP;
+    cam.goal.set(0, TABLE_Y, 0);
+    cam.radius = 3.2; cam.pitch = 0.5;
+  }
+  if (window.PixelPoolMode) window.PixelPoolMode.showHome();
 });
 
 document.getElementById('stylePrev').addEventListener('click', () => selectTableStyle(currentTableStyle - 1, true));
