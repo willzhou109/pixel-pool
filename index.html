@@ -292,9 +292,74 @@
   #endTitle { font-size: 22px; line-height: 1.5; margin-bottom: 14px; color: var(--accent); text-shadow: 3px 3px 0 #000; }
   #endReason { color: var(--text-dim); font-size: 9px; line-height: 1.9; margin-bottom: 6px; }
 
-  /* Mode select (offline / online) */
-  #modePanel { text-align: center; max-width: 420px; }
-  #modeNote { color: var(--text-dim); font-size: 8px; line-height: 1.8; margin-top: 14px; min-height: 14px; }
+  /* Home screen — full-bleed layout over the dimmed, spinning table:
+     main area (title / game tabs / offline-online / play) + right sidebar
+     (profile, friends, chat, notifications — placeholders for now). */
+  #modeOverlay { align-items: stretch; justify-content: flex-start; }
+  #homeMain {
+    flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+    padding: 44px 48px; overflow-y: auto;
+  }
+  #homeMain h1 { font-size: 22px; line-height: 1.5; color: var(--accent); text-shadow: 3px 3px 0 #000; }
+  #modeWelcome { color: var(--text-dim); font-size: 10px; line-height: 1.9; margin-top: 10px; }
+
+  #gameTabs {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;
+    margin-top: 34px; padding-bottom: 14px;
+    border-bottom: 3px solid var(--panel-border);
+  }
+  .gameTab {
+    font-family: var(--px); font-size: 10px; padding: 11px 15px;
+    background: rgba(0, 0, 0, 0.45); border: 3px solid var(--panel-border);
+    color: var(--text-dim); cursor: pointer;
+  }
+  .gameTab:active { transform: translate(1px, 1px); }
+  .gameTab.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+  .gameTab.soon { opacity: 0.65; }
+
+  #playModes { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 30px; }
+  .playMode {
+    font-family: var(--px); font-size: 11px; padding: 13px 20px;
+    background: rgba(0, 0, 0, 0.45); border: 3px solid var(--panel-border);
+    color: var(--text-dim); cursor: pointer;
+  }
+  .playMode:active { transform: translate(1px, 1px); }
+  .playMode.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+
+  #modeNote { color: var(--text-dim); font-size: 8px; line-height: 1.8; margin-top: 18px; min-height: 14px; }
+  #playBtn { align-self: center; font-size: 16px; padding: 18px 52px; margin-top: 42px; }
+
+  #homeSide {
+    flex: 0 0 240px; display: flex; flex-direction: column; gap: 12px;
+    background: var(--panel); border-left: 3px solid var(--panel-border);
+    padding: 26px 18px; overflow-y: auto;
+  }
+  .sideBtn {
+    position: relative; text-align: left;
+    font-family: var(--px); font-size: 9px; padding: 13px 14px;
+    background: rgba(0, 0, 0, 0.35); border: 3px solid var(--panel-border);
+    color: var(--text); cursor: pointer;
+  }
+  .sideBtn:active { transform: translate(1px, 1px); }
+  .sideBtn.dim { color: var(--text-dim); }
+  #profileBtn { border-color: var(--accent); color: var(--accent); }
+  #notifDot {
+    position: absolute; top: -6px; right: -6px; width: 12px; height: 12px;
+    background: #e74c3c; border: 2px solid #000;
+  }
+  .sideSpacer { flex: 1; }
+
+  /* Narrow screens: sidebar drops below the main area as a wrapping row. */
+  @media (max-width: 640px) {
+    #modeOverlay { flex-direction: column; }
+    #homeMain { padding: 26px 20px; }
+    #homeSide {
+      flex: none; flex-direction: row; flex-wrap: wrap;
+      border-left: none; border-top: 3px solid var(--panel-border);
+      padding: 14px 16px;
+    }
+    .sideSpacer { flex: 0; }
+  }
 
   /* Online auth (login / signup / lobby) */
   #loginPanel, #signupPanel, #lobbyPanel { text-align: center; max-width: 420px; }
@@ -390,13 +455,33 @@
 </div>
 
 <div id="modeOverlay" class="overlay hidden">
-  <div class="panel" id="modePanel">
+  <div id="homeMain">
     <h1>&#127921; PIXEL POOL</h1>
-    <div class="sub" id="modeWelcome">WELCOME, PLAYER!</div>
-    <button class="bigBtn" id="offlineBtn">OFFLINE</button>
-    <button class="bigBtn ghostBtn" id="onlineBtn">ONLINE</button>
+    <div id="modeWelcome">WELCOME, PLAYER!</div>
+
+    <div id="gameTabs">
+      <button class="gameTab sel" data-game="8ball">8-BALL</button>
+      <button class="gameTab soon" data-game="9ball">9-BALL</button>
+      <button class="gameTab soon" data-game="10ball">10-BALL</button>
+      <button class="gameTab soon" data-game="snooker">SNOOKER</button>
+    </div>
+
+    <div id="playModes">
+      <button class="playMode" id="offlineBtn">OFFLINE</button>
+      <button class="playMode" id="onlineBtn">ONLINE</button>
+    </div>
+
     <div id="modeNote"></div>
-    <button class="bigBtn ghostBtn" id="modeLogoutBtn">LOG OUT</button>
+    <button class="bigBtn" id="playBtn">PLAY</button>
+  </div>
+
+  <div id="homeSide">
+    <button class="sideBtn" id="profileBtn">PLAYER</button>
+    <button class="sideBtn" id="friendsBtn">FRIENDS</button>
+    <button class="sideBtn" id="chatSideBtn">CHAT</button>
+    <button class="sideBtn" id="notifsBtn">NOTIFICATIONS<span id="notifDot"></span></button>
+    <div class="sideSpacer"></div>
+    <button class="sideBtn dim" id="modeLogoutBtn">LOG OUT</button>
   </div>
 </div>
 
