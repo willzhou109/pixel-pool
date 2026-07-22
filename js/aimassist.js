@@ -5,7 +5,7 @@
      • pockets — a pocket glows transparent green when the ball currently being
                  aimed at is lined up to drop into it.
 
-   Choosable on the setup screen and toggleable live during a game. All the
+   Toggleable live during a game, from the in-game settings panel. All the
    rendering, prediction and UI for this feature lives here; game.js only
    exposes the geometry it needs (window.PoolAimHooks) and asks this module
    whether lines are on / to refresh the pocket preview each frame. */
@@ -16,7 +16,7 @@ const hooks = window.PoolAimHooks;
 if (!hooks) { console.warn('AimAssist: PoolAimHooks missing'); return; }
 const { POCKETS, R, balls } = hooks;
 
-const settings = { lines: true, pockets: false }; // default: current behaviour
+const settings = { lines: true, pockets: true }; // default: both aids on
 
 /* --------------------------- pocket glow control ------------------------ */
 
@@ -73,8 +73,8 @@ function updateAim(hit, gx, gz) {
 /* --------------------------------- UI ----------------------------------- */
 
 const OPTIONS = [
-  { key: 'lines',   label: 'GUIDE LINES', short: 'LINES' },
-  { key: 'pockets', label: 'POCKET GLOW', short: 'POCKETS' },
+  { key: 'lines',   short: 'LINES' },
+  { key: 'pockets', short: 'POCKETS' },
 ];
 const buttons = []; // {key, el}
 
@@ -88,21 +88,20 @@ function toggle(key) {
   refresh();
 }
 
-function buildInto(container, useShort) {
+function buildInto(container) {
   if (!container) return;
   for (const opt of OPTIONS) {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'aimTgl';
-    el.textContent = useShort ? opt.short : opt.label;
+    el.textContent = opt.short;
     el.addEventListener('click', () => toggle(opt.key));
     container.appendChild(el);
     buttons.push({ key: opt.key, el });
   }
 }
 
-buildInto(document.getElementById('aimRow'), false);        // setup screen
-buildInto(document.getElementById('aimSwitch'), true);      // in-game switcher
+buildInto(document.getElementById('aimSwitch'));      // in-game switcher
 refresh();
 
 /* ------------------------------- exports -------------------------------- */

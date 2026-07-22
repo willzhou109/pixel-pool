@@ -5,10 +5,9 @@
  * build. 1.0 (100%) is the tuned default; lower feels slower/finer, higher
  * feels faster/twitchier.
  *
- * Mirrors the aim-assist pattern: the same control is built into the setup
- * screen (#sensRow) and an in-game switcher (#sensSwitch), each offering a
- * slider plus a number box for entering an exact percentage. The chosen value
- * persists across sessions. keyboard.js reads it via window.KeyboardSensitivity.
+ * Built into the in-game switcher (#sensSwitch), offering a slider plus a
+ * number box for entering an exact percentage. The chosen value persists
+ * across sessions. keyboard.js reads it via window.KeyboardSensitivity.
  */
 (function () {
   'use strict';
@@ -73,7 +72,6 @@
     numbers.push(num);
   }
 
-  buildInto(document.getElementById('sensRow'));     // setup screen
   buildInto(document.getElementById('sensSwitch'));  // in-game switcher
 
   window.KeyboardSensitivity = { value() { return value; } };

@@ -31,7 +31,7 @@ const insertUser = db.prepare(
   'INSERT INTO users (username, password_hash) VALUES (?, ?)'
 );
 const selectByName = db.prepare(
-  'SELECT id, username, password_hash FROM users WHERE username = ?'
+  'SELECT id, username, password_hash, created_at FROM users WHERE username = ?'
 );
 
 module.exports = {

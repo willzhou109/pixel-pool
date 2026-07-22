@@ -23,7 +23,7 @@
     signupBtn: $('signupBtn'), signupErr: $('signupErr'),
     toSignup: $('toSignup'), toLogin: $('toLogin'),
     loginBack: $('loginBack'), signupBack: $('signupBack'),
-    lobbyUser: $('lobbyUser'), logoutBtn: $('logoutBtn'),
+    lobbyUser: $('lobbyUser'), lobbyBackBtn: $('lobbyBackBtn'),
   };
   if (!el.login || !el.signup) { console.warn('Auth: overlays missing'); return; }
 
@@ -33,6 +33,7 @@
   // silently overwrite the first tab's session (last writer wins).
   const TOKEN_KEY = 'pp_token', USER_KEY = 'pp_user';
   const getToken = () => { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } };
+  const getUser = () => { try { return sessionStorage.getItem(USER_KEY); } catch { return null; } };
   const setSession = (token, username) => {
     try { sessionStorage.setItem(TOKEN_KEY, token); sessionStorage.setItem(USER_KEY, username); } catch {}
   };
@@ -113,6 +114,10 @@
       if (!ok) { errEl.textContent = data.error || 'Something went wrong.'; return; }
       setSession(data.token, data.username);
       passEl.value = '';
+      // Open the realtime connection right away — the player is connected for
+      // their whole session from the moment they log in, so entering the
+      // lobby later is instant. Only logout disconnects.
+      if (window.PixelPoolNet) window.PixelPoolNet.connect(data.token);
       showHome(data.username);
     } catch {
       errEl.textContent = 'Can\'t reach the server. Is it running (localhost:3000)?';
@@ -137,10 +142,12 @@
   el.toLogin.addEventListener('click', showLogin);
   el.loginBack.addEventListener('click', showLanding);
   el.signupBack.addEventListener('click', showLanding);
-  // Lobby "LOG OUT": drop the socket + session and return to the landing screen.
-  el.logoutBtn.addEventListener('click', () => {
-    logout();
-    showLanding();
+  // Lobby "BACK": leave matchmaking but keep the session AND the socket — the
+  // player stays logged in and connected on the home screen. (Logging out
+  // lives on the home screen's sidebar and is what disconnects.)
+  el.lobbyBackBtn.addEventListener('click', () => {
+    if (window.PixelPoolLobby) window.PixelPoolLobby.suspend();
+    showHome(getUser());
   });
 
   window.PixelPoolAuth = { openOnline, showLogin, logout };

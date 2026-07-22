@@ -98,7 +98,8 @@ async function signup(body) {
     // UNIQUE constraint (or any insert failure) — treat as name taken.
     return { status: 409, body: { error: 'That username is already taken.' } };
   }
-  return { status: 201, body: { token: signToken(username), username } };
+  const user = findUser(username);
+  return { status: 201, body: { token: signToken(username), username, createdAt: user.created_at } };
 }
 
 async function login(body) {
@@ -115,13 +116,14 @@ async function login(body) {
     // Generic message — never reveal which field was wrong.
     return { status: 401, body: { error: 'Invalid username or password.' } };
   }
-  return { status: 200, body: { token: signToken(user.username), username: user.username } };
+  return { status: 200, body: { token: signToken(user.username), username: user.username, createdAt: user.created_at } };
 }
 
 function me(token) {
   const username = verifyToken(token);
   if (!username) return { status: 401, body: { error: 'Not signed in.' } };
-  return { status: 200, body: { username } };
+  const user = findUser(username);
+  return { status: 200, body: { username, createdAt: user ? user.created_at : null } };
 }
 
 module.exports = { signup, login, me, verifyToken };

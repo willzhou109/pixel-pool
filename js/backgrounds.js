@@ -1,8 +1,8 @@
 /* Play-space backgrounds for Pixel Pool.
  *
- * A selectable environment surrounding the table — chosen on the setup screen
- * (#bgRow) and swappable live from the settings panel (#bgSwitch), exactly like
- * the table-style picker.
+ * A selectable environment surrounding the table — swappable live from the
+ * in-game settings panel (#bgSwitch) and the home/profile screens' own view
+ * panel (#homeBgSwitch), exactly like the table-style picker.
  *
  * CRITICAL: backgrounds are pure decoration. Every scenery mesh is built with
  * castShadow = false and no background adds/moves/removes a light, so switching
@@ -527,26 +527,14 @@
 
     const nameEl = document.getElementById('bgName');
     if (nameEl) nameEl.textContent = B.name.toUpperCase();
-    const row = document.getElementById('bgRow');
-    if (row) Array.from(row.children).forEach((c, idx) => c.classList.toggle('sel', idx === current));
+    const homeNameEl = document.getElementById('homeBgName');
+    if (homeNameEl) homeNameEl.textContent = B.name.toUpperCase();
     if (announce) S.toast(`Background: ${B.name}`);
     if (!fromNet && changeCb) changeCb(current);
   }
 
   /* --------------------------------- UI ---------------------------------- */
 
-  const row = document.getElementById('bgRow');
-  if (row) {
-    row.innerHTML = '';
-    BACKGROUNDS.forEach((B, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'hatBtn' + (i === current ? ' sel' : '');
-      b.textContent = B.name.toUpperCase();
-      b.addEventListener('click', () => apply(i, false));
-      row.appendChild(b);
-    });
-  }
   const prev = document.getElementById('bgPrev');
   const next = document.getElementById('bgNext');
   if (prev) prev.addEventListener('click', () => apply(current - 1, true));

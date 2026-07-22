@@ -27,10 +27,20 @@
       fire('status', 'error', 'Socket.IO client failed to load.');
       return;
     }
-    if (socket && socket.connected) { fire('status', 'connected'); return; }
+    // Called from both login (auth.js) and lobby entry (lobby.js) — reuse the
+    // live socket instead of stacking a second connection.
+    if (socket) {
+      socket.auth = { token }; // keep fresh in case of a re-login
+      if (socket.connected) { fire('status', 'connected'); return; }
+      fire('status', 'connecting');
+      socket.connect(); // retry a dropped/exhausted connection
+      return;
+    }
 
     fire('status', 'connecting');
-    socket = io({ auth: { token }, reconnectionAttempts: 5 });
+    // forceNew: socket.io caches managers per URL and would otherwise hand
+    // back a socket still carrying the auth of a previous login.
+    socket = io({ auth: { token }, reconnectionAttempts: 5, forceNew: true });
 
     socket.on('connect', () => fire('status', 'connected'));
     socket.on('welcome', data => fire('welcome', data));

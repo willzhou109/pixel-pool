@@ -1,9 +1,10 @@
 /* Lobby + matchmaking UI for Pixel Pool Online.
  *
- * Owns the lobby overlay's states (idle → searching → matched) and the socket
- * lifecycle while the player is in the lobby. auth.js hands off here once the
- * player is authenticated: activate(username, token) opens the connection,
- * deactivate() tears it down (logout). All server talk goes through net.js.
+ * Owns the lobby overlay's states (idle → searching → matched). The socket is
+ * opened at login (auth.js) and lives for the whole session; activate() just
+ * makes sure it's up when the lobby is entered, suspend() leaves the lobby
+ * without dropping it (BACK to home), and deactivate() tears it down (logout).
+ * All server talk goes through net.js.
  *
  * Actual online gameplay isn't built yet — a found match currently just shows
  * who you're playing and who breaks. The shot-sync layer plugs in here next.
@@ -67,6 +68,13 @@
     Net.disconnect();
     showState('idle');
   }
+  // BACK to the home screen: leave matchmaking but keep the socket — the
+  // player stays connected for their whole session; only logout disconnects.
+  function suspend() {
+    Net.cancelMatch();
+    Net.leaveMatch();
+    showState('idle');
+  }
   // Called by online.js when a match ends/drops: re-show the lobby (still
   // connected) in its idle state, with an optional one-off note.
   function backToIdle(note) {
@@ -75,5 +83,5 @@
     if (note && el.status) el.status.textContent = note;
   }
 
-  window.PixelPoolLobby = { activate, deactivate, backToIdle };
+  window.PixelPoolLobby = { activate, deactivate, suspend, backToIdle };
 })();

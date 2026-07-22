@@ -1519,21 +1519,6 @@ function buildSetupUI() {
     card.appendChild(nameIn);
     row.appendChild(card);
   });
-  buildStyleRow();
-}
-
-// Table-style picker (setup panel row + shared with the in-game switcher).
-function buildStyleRow() {
-  const row = document.getElementById('styleRow');
-  if (!row) return;
-  row.innerHTML = '';
-  TABLE_STYLES.forEach((st, i) => {
-    const b = document.createElement('button');
-    b.className = 'hatBtn' + (i === currentTableStyle ? ' sel' : '');
-    b.textContent = st.name.toUpperCase();
-    b.addEventListener('click', () => selectTableStyle(i, false));
-    row.appendChild(b);
-  });
 }
 
 function selectTableStyle(i, announce) {
@@ -1541,8 +1526,8 @@ function selectTableStyle(i, announce) {
   const name = TABLE_STYLES[currentTableStyle].name;
   const nameEl = document.getElementById('styleName');
   if (nameEl) nameEl.textContent = name.toUpperCase();
-  const row = document.getElementById('styleRow');
-  if (row) Array.from(row.children).forEach((c, idx) => c.classList.toggle('sel', idx === currentTableStyle));
+  const homeNameEl = document.getElementById('homeStyleName');
+  if (homeNameEl) homeNameEl.textContent = name.toUpperCase();
   if (announce) toast(`Table style: ${name}`);
   sendSetup(); // online: keep the opponent's table in sync (no-op offline / when applying a remote setup)
 }
@@ -1571,6 +1556,14 @@ document.getElementById('changeBtn').addEventListener('click', () => {
 
 document.getElementById('stylePrev').addEventListener('click', () => selectTableStyle(currentTableStyle - 1, true));
 document.getElementById('styleNext').addEventListener('click', () => selectTableStyle(currentTableStyle + 1, true));
+
+// Surface for the home/profile screens' own view panel (js/homeview.js) to
+// cycle the same table style shown in-game, without reaching into game.js's
+// closed-over state directly.
+window.PoolTableStyles = {
+  next: () => selectTableStyle(currentTableStyle + 1, true),
+  prev: () => selectTableStyle(currentTableStyle - 1, true),
+};
 
 /* ================================= INPUT ================================ */
 

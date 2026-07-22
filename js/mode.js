@@ -8,8 +8,15 @@
  * Guests can't go online — the multiplayer server rejects sockets without a
  * real session token — so ONLINE just tells them to log in.
  *
- * The right sidebar (profile / friends / chat / notifications) is placeholder
- * UI for features that aren't built yet; only LOG OUT does anything.
+ * #modeOverlay also hosts the profile panel (#profileMain, owned by
+ * js/profile.js) as a sibling of #homeMain — only one is shown at a time, but
+ * both live inside the same overlay as the sidebar (#homeSide) and chat bar
+ * (#homeChat), so those two persist across home <-> profile navigation
+ * instead of being torn down and rebuilt.
+ *
+ * The right sidebar (profile / friends / notifications) is placeholder UI for
+ * features that aren't built yet, except the name button, which opens the
+ * profile page (js/profile.js), and LOG OUT.
  */
 (function () {
   'use strict';
@@ -24,6 +31,10 @@
   const playBtn = $('playBtn');
   const profileBtn = $('profileBtn');
   const logoutBtn = $('modeLogoutBtn');
+  const homeSide = $('homeSide');
+  const sideToggleBtn = $('sideToggleBtn');
+  const homeMain = $('homeMain');
+  const profileMain = $('profileMain');
   const tabs = Array.from(document.querySelectorAll('.gameTab'));
   if (!overlay || !setupOverlay || !offlineBtn || !onlineBtn || !playBtn) {
     console.warn('Home: elements missing');
@@ -33,6 +44,7 @@
   const GAME_NAMES = { '9ball': '9-BALL', '10ball': '10-BALL', snooker: 'SNOOKER' };
 
   let guest = false;
+  let currentUsername = null;
   let mode = 'offline'; // 'offline' | 'online' — what PLAY will launch
 
   function setMode(m) {
@@ -43,6 +55,7 @@
 
   function enter(username, isGuest) {
     guest = !!isGuest;
+    currentUsername = username;
     const name = guest ? 'GUEST' : (username || 'PLAYER').toUpperCase();
     if (welcome) welcome.textContent = 'WELCOME, ' + name + '!';
     if (profileBtn) profileBtn.textContent = name;
@@ -50,6 +63,9 @@
     setMode(guest ? 'offline' : 'online'); // guests can't play online
     [$('landingOverlay'), $('loginOverlay'), $('signupOverlay'), $('lobbyOverlay')]
       .forEach(o => o && o.classList.add('hidden'));
+    // Always land on the home panel, not wherever profile was left showing.
+    if (profileMain) profileMain.classList.add('hidden');
+    if (homeMain) homeMain.classList.remove('hidden');
     overlay.classList.remove('hidden');
   }
 
@@ -87,11 +103,45 @@
     setupOverlay.classList.remove('hidden');
   });
 
+  const setupBackBtn = $('setupBackBtn');
+  if (setupBackBtn) setupBackBtn.addEventListener('click', () => {
+    setupOverlay.classList.add('hidden');
+    overlay.classList.remove('hidden');
+  });
+
   /* -------------------------------- sidebar ------------------------------- */
-  // profile / friends / chat / notifications are intentionally inert for now.
+  // friends / notifications are intentionally inert for now.
+  if (profileBtn) profileBtn.addEventListener('click', () => {
+    if (window.PixelPoolProfile) window.PixelPoolProfile.show(currentUsername, guest);
+  });
   logoutBtn.addEventListener('click', () => {
     if (window.PixelPoolAuth) window.PixelPoolAuth.logout();
     if (window.PixelPoolLanding) window.PixelPoolLanding.show();
+  });
+
+  // Collapse toggle: the panel folds away entirely and the same button keeps
+  // floating in the top-right corner (it lives outside #homeSide) to bring it
+  // back. State isn't reset on enter() — it stays how the player left it.
+  if (homeSide && sideToggleBtn) sideToggleBtn.addEventListener('click', () => {
+    const collapsed = homeSide.classList.toggle('collapsed');
+    sideToggleBtn.innerHTML = collapsed ? '&#9664;' : '&#9654;';
+    sideToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+  });
+
+  /* ------------------------------- home chat ------------------------------ */
+  // Placeholder until the friends feature exists: same look as the in-match
+  // chat, collapsible, but sending goes nowhere (there's nobody to send to).
+  const homeChat = $('homeChat');
+  const homeChatForm = $('homeChatForm');
+  const homeChatInput = $('homeChatInput');
+  const homeChatToggle = $('homeChatToggle');
+  if (homeChatForm) homeChatForm.addEventListener('submit', e => {
+    e.preventDefault();
+    if (homeChatInput) homeChatInput.value = '';
+  });
+  if (homeChat && homeChatToggle) homeChatToggle.addEventListener('click', () => {
+    const collapsed = homeChat.classList.toggle('collapsed');
+    homeChatToggle.innerHTML = collapsed ? '&#9650;' : '&#9660;';
   });
 
   window.PixelPoolMode = { enter };
