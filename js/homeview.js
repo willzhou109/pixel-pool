@@ -7,7 +7,7 @@
  * js/backgrounds.js) while just looking at the home screen's spinning table.
  *
  * Lives as a direct sibling of #homeMain / #profileMain inside #modeOverlay
- * (like #homeSide and #homeChat), so it persists across home <-> profile
+ * (like #userMenu and #homeChat), so it persists across home <-> profile
  * navigation instead of being torn down and rebuilt.
  */
 (function () {

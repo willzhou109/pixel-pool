@@ -119,17 +119,28 @@
     return d;
   }
 
+  // Ball numbers newly potted on this stroke, diffed from the before/after
+  // layouts (so it also covers opponent balls and needs no extra log data).
+  // The cue ball is excluded — the SCRATCH foul label already covers it.
+  function pottedIds(shot) {
+    if (!shot.before || !shot.after) return null;
+    const was = new Set(shot.before.filter(r => r[3]).map(r => r[0]));
+    return shot.after.filter(r => r[3] && r[0] !== 0 && !was.has(r[0])).map(r => r[0]);
+  }
+
   function caption(shot, n) {
+    const ids = pottedIds(shot);
     let s = 'SHOT ' + n + ' — ' +
-      (shot.pots > 0 ? 'POCKETED ' + shot.pots : 'NO POT');
+      (ids ? (ids.length ? 'POCKETED ' + ids.join(', ') : 'NO POT')
+           : (shot.pots > 0 ? 'POCKETED ' + shot.pots : 'NO POT')); // no layouts logged — fall back to the count
     if (shot.foul) s += ' · ' + (FOUL_LABEL[shot.foul] || 'FOUL');
     return s;
   }
 
-  function render() {
-    const wrap = $('recapLayout');
-    if (!wrap || !window.MatchStats) return;
-    const { log, names } = window.MatchStats.playByPlay();
+  // Draw a shot log into `wrap` as turn-by-turn before/after board pairs.
+  // Also used by js/history.js for the LAYOUT tab of a stored match, where the
+  // log comes from the server instead of the live MatchStats module.
+  function renderLog(wrap, log, names) {
     wrap.innerHTML = '';
     if (!log.length) {
       wrap.appendChild(el('div', 'pbpCaption', 'NO SHOTS RECORDED.'));
@@ -155,12 +166,24 @@
     }
   }
 
+  function render() {
+    const wrap = $('recapLayout');
+    if (!wrap || !window.MatchStats) return;
+    const { log, names } = window.MatchStats.playByPlay();
+    renderLog(wrap, log, names);
+  }
+
   /* ------------------------------ tab wiring ------------------------------ */
 
   const tabStats = $('recapTabStats'), tabLayout = $('recapTabLayout');
   const statsView = $('recapTable'), layoutView = $('recapLayout');
 
   function showTab(layout) {
+    // Lock the LAYOUT pane to the STATS table's height (measured while STATS
+    // is still visible) so the panel doesn't resize when switching tabs.
+    if (layout && statsView && layoutView && statsView.offsetHeight) {
+      layoutView.style.height = statsView.offsetHeight + 'px';
+    }
     if (tabStats) tabStats.classList.toggle('recapTabOn', !layout);
     if (tabLayout) tabLayout.classList.toggle('recapTabOn', layout);
     if (statsView) statsView.classList.toggle('hidden', layout);
@@ -175,4 +198,7 @@
     const recapBtn = $('recapBtn');
     if (recapBtn) recapBtn.addEventListener('click', () => showTab(false));
   }
+
+  // Shared with js/history.js (see renderLog).
+  window.PlayByPlay = { renderLog };
 })();

@@ -23,6 +23,9 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const auth = require('./auth');
+const history = require('./history');
+const friends = require('./friends');
+const chat = require('./chat');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = path.resolve(__dirname, '..'); // project root holds index.html, js/, lib/
@@ -94,13 +97,49 @@ function rateLimited(ip) {
 }
 
 /* --------------------------------- routes -------------------------------- */
-async function handleApi(req, res, pathname) {
+const bearer = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
+async function handleApi(req, res, pathname, searchParams) {
   const ip = req.socket.remoteAddress || 'unknown';
 
   if (pathname === '/api/me' && req.method === 'GET') {
-    const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-    const { status, body } = auth.me(token);
+    const { status, body } = auth.me(bearer(req));
     return sendJson(res, status, body);
+  }
+
+  // Match history (server/history.js): the signed-in player's game list, and
+  // one full match (stats + play-by-play) by id.
+  if (req.method === 'GET' && (pathname === '/api/history' || /^\/api\/match\/\d+$/.test(pathname))) {
+    const { status, body } = pathname === '/api/history'
+      ? history.history(bearer(req))
+      : history.matchDetail(bearer(req), Number(pathname.slice('/api/match/'.length)));
+    return sendJson(res, status, body);
+  }
+
+  // Friends (server/friends.js): the signed-in player's friends + pending
+  // requests, a user search for adding people, and one conversation's history.
+  if (req.method === 'GET' && pathname === '/api/friends') {
+    const { status, body } = friends.list(bearer(req));
+    return sendJson(res, status, body);
+  }
+  if (req.method === 'GET' && pathname === '/api/users/search') {
+    const { status, body } = friends.search(bearer(req), searchParams.get('q'));
+    return sendJson(res, status, body);
+  }
+  if (req.method === 'GET' && /^\/api\/messages\/[A-Za-z0-9_]{3,20}$/.test(pathname)) {
+    const other = decodeURIComponent(pathname.slice('/api/messages/'.length));
+    const { status, body } = chat.conversation(bearer(req), other);
+    return sendJson(res, status, body);
+  }
+
+  // Friend actions — request / accept / decline / remove — all take { username }.
+  const friendAction = /^\/api\/friends\/(request|accept|decline|remove)$/.exec(pathname);
+  if (req.method === 'POST' && friendAction) {
+    let body;
+    try { body = await readJsonBody(req); }
+    catch { return sendJson(res, 400, { error: 'Bad request.' }); }
+    const { status, body: out } = friends[friendAction[1]](bearer(req), body);
+    return sendJson(res, status, out);
   }
 
   if ((pathname === '/api/signup' || pathname === '/api/login') && req.method === 'POST') {
@@ -123,8 +162,8 @@ async function handleApi(req, res, pathname) {
 
 /* -------------------------------- server --------------------------------- */
 const server = http.createServer((req, res) => {
-  const { pathname } = new URL(req.url, 'http://localhost');
-  if (pathname.startsWith('/api/')) return handleApi(req, res, pathname);
+  const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+  if (pathname.startsWith('/api/')) return handleApi(req, res, pathname, searchParams);
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('Method not allowed'); }
   return serveStatic(req, res, pathname);
 });

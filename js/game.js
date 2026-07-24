@@ -57,6 +57,15 @@ const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 60);
 
 /* camera orbit state */
 const START_PITCH = 0.34, START_RADIUS = 0.95; // the low first-person shot view
+// Bird's-eye "survey" pose — shown while the local player must make a
+// decision that benefits from seeing the whole table: placing the cue ball
+// after a foul (S.PLACING) or nominating a pocket on the 8-ball (S.CALLING).
+// Yaw 0 puts the table's long axis (world X, PW=1.27) horizontal on screen
+// and the short axis (Z, PH=0.635) into the depth — see updateCamera()'s
+// spherical layout, where screen-right tracks cos(yaw) and screen-up tracks
+// -sin(pitch) at high pitch, so yaw=0 keeps X purely horizontal.
+const SURVEY_YAW = 0, SURVEY_PITCH = 1.35, SURVEY_RADIUS = 3.1;
+let yawBeforeSurvey = null; // stashed cam.yaw while surveying; null = not surveying
 const cam = {
   yaw: Math.PI * 0.5, pitch: 0.72, radius: 3.4,
   target: new THREE.Vector3(0, TABLE_Y, 0),
@@ -79,6 +88,35 @@ function updateCamera() {
 /* aim direction: horizontal camera forward */
 function aimDir() {
   return new THREE.Vector2(-Math.sin(cam.yaw), -Math.cos(cam.yaw));
+}
+
+// Some background scenes hang decorative fixtures directly above the table
+// (e.g. the Pool Hall's pendant lamp, js/backgrounds.js) — from straight
+// overhead those loom over most of the frame, so the survey camera hides
+// anything tagged userData.hideOnSurveyCam for as long as it's active.
+function setOverheadFixturesVisible(visible) {
+  scene.traverse(o => { if (o.userData && o.userData.hideOnSurveyCam) o.visible = visible; });
+}
+
+// Enter the bird's-eye survey pose (see SURVEY_* above). Idempotent — placing
+// the cue ball while on the 8-ball chains PLACING straight into CALLING, and
+// the second call must not clobber the originally-stashed yaw with 0.
+function enterSurveyCam() {
+  if (yawBeforeSurvey !== null) return;
+  yawBeforeSurvey = cam.yaw;
+  cam.yaw = SURVEY_YAW; cam.pitch = SURVEY_PITCH; cam.radius = SURVEY_RADIUS;
+  setOverheadFixturesVisible(false);
+}
+// Leave the survey pose once the decision is made (ball placed, pocket
+// called) — restores the yaw the player had been aiming from and drops
+// pitch/radius to the standard low shot POV via resetZoom(). A no-op unless
+// a survey is actually active, so it's safe to call after every ordinary shot.
+function exitSurveyCam() {
+  if (yawBeforeSurvey === null) return;
+  cam.yaw = yawBeforeSurvey;
+  yawBeforeSurvey = null;
+  setOverheadFixturesVisible(true);
+  resetZoom();
 }
 
 /* =============================== LIGHTING =============================== */
@@ -985,9 +1023,10 @@ function enterAim() {
   setCalledPocket(-1);
   if (myTurn() && isOnEight(turn)) {
     state = S.CALLING;
-    cam.radius = 2.2; cam.pitch = 0.85; // pull back so every pocket is easy to tap
+    enterSurveyCam(); // bird's-eye view to survey every pocket
   } else {
     state = S.AIM;
+    exitSurveyCam(); // no-op unless we were surveying (e.g. leaving CALLING/PLACING)
   }
 }
 
@@ -1076,7 +1115,7 @@ function resolveShot() {
     if (scratch && potted8) return endGame(1 - turn, `${me.cfg.name} pocketed the cue ball with the 8.`);
     if (potted8) {
       return shotEvents.eightPocket === calledPocket
-        ? endGame(turn, `${me.cfg.name} sank the 8-ball in the called pocket!`)
+        ? endGame(turn, `${me.cfg.name} sank the 8-ball in the called pocket.`)
         : endGame(1 - turn, `${me.cfg.name} sank the 8-ball in the wrong pocket.`);
     }
     // 8 stayed up: a scratch becomes a ball-in-hand foul, a clean miss just
@@ -1119,7 +1158,7 @@ function resolveShot() {
     lastFoul = scratch
       ? `Scratch! ${players[turn].cfg.name}: place the cue ball`
       : `Foul — ${first === null ? 'no contact' : 'incorrect first contact'}! ${players[turn].cfg.name}: ball in hand`;
-    if (myTurn()) pinToast(lastFoul); else toast(lastFoul);
+    if (myTurn()) { pinToast(lastFoul); enterSurveyCam(); } else toast(lastFoul);
     state = S.PLACING;
   } else {
     if (!keepTurn) turn = 1 - turn;
@@ -1142,6 +1181,7 @@ function resolveShot() {
 function resetSceneAfterGame() {
   rackBalls();
   document.getElementById('help').classList.add('hidden');
+  exitSurveyCam(); // don't leave the bird's-eye view stuck if the match ended mid-decision (forfeit)
 }
 
 function endGame(winner, reason) {
@@ -1183,6 +1223,7 @@ function startMatch() {
   pinnedMsg = null; // clear any prompt pinned from a previous game
   state = S.AIM;
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS; // first-person: low, just behind the cue ball
+  yawBeforeSurvey = null; // a fresh match starts clean, never mid-survey
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
   if (window.SettingsPanel) window.SettingsPanel.show();
@@ -1340,14 +1381,15 @@ function applyState(msg) {
     resetSceneAfterGame();
   } else if (msg.phase === 'place') {
     state = S.PLACING;
-    if (myTurn()) pinToast('Ball in hand — place the cue ball');
+    if (myTurn()) { pinToast('Ball in hand — place the cue ball'); enterSurveyCam(); }
     else toast(msg.foul || `${players[turn].cfg.name} fouled`);
   } else if (myTurn() && isOnEight(turn)) {
     state = S.CALLING;
-    cam.radius = 2.2; cam.pitch = 0.85;
+    enterSurveyCam();
     pinToast(`Only the 8-ball left — tap the pocket you'll call`);
   } else {
     state = S.AIM;
+    exitSurveyCam(); // defensive: no-op unless a survey was left running
     toast(myTurn() ? 'Your turn' : `${players[turn].cfg.name}'s turn`);
   }
 }
@@ -1427,6 +1469,7 @@ function startOnline(opts) {
   pinnedMsg = null; // clear any prompt pinned from a previous game
   state = S.AIM; wasMoving = false;
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS;
+  yawBeforeSurvey = null; // a fresh match starts clean, never mid-survey
 
   ['landingOverlay', 'modeOverlay', 'loginOverlay', 'signupOverlay', 'lobbyOverlay', 'setupOverlay', 'endOverlay']
     .forEach(id => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
@@ -1739,7 +1782,7 @@ canvas.addEventListener('pointerup', e => {
     if (pi >= 0) {
       setCalledPocket(pi);
       state = S.AIM;
-      resetZoom(); // drop from the survey view back to the low first-person shot POV
+      exitSurveyCam(); // drop from the bird's-eye survey back to the low first-person shot POV
       unpinToast(); // the pocket is chosen; release the "call a pocket" prompt
       toast('Pocket called — sink the 8-ball there.');
       if (onlineMode) netSend({ t: 'call', p: pi });

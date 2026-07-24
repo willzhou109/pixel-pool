@@ -138,6 +138,23 @@
     return d;
   }
 
+  // Fill any element styled as a .statTable grid with the per-seat stat rows.
+  // Also used by js/history.js to show a stored match's stats on the profile
+  // page — seatData there comes from the server, so blank-fill defensively.
+  function renderStatsTable(tableEl, seatData, seatNames) {
+    const sd = [Object.assign(blank(), seatData && seatData[0]),
+                Object.assign(blank(), seatData && seatData[1])];
+    tableEl.innerHTML = '';
+    tableEl.appendChild(cell('recapLabel', ''));
+    tableEl.appendChild(cell('recapHead', seatNames[0]));
+    tableEl.appendChild(cell('recapHead', seatNames[1]));
+    for (const [label, get, sub] of ROWS) {
+      tableEl.appendChild(cell('recapLabel' + (sub ? ' recapSub' : ''), label));
+      tableEl.appendChild(cell('recapVal', String(get(sd[0]))));
+      tableEl.appendChild(cell('recapVal', String(get(sd[1]))));
+    }
+  }
+
   function render() {
     const winnerEl = $('recapWinner'), reasonEl = $('recapReason'),
           tableEl = $('recapTable'), durEl = $('recapDuration');
@@ -152,15 +169,7 @@
     if (reasonEl) reasonEl.textContent = result && result.reason ? '' + result.reason + '' : '';
     if (durEl) durEl.textContent = result ? 'GAME LENGTH ' + fmtDur(result.seconds) : '';
 
-    tableEl.innerHTML = '';
-    tableEl.appendChild(cell('recapLabel', ''));
-    tableEl.appendChild(cell('recapHead', names[0]));
-    tableEl.appendChild(cell('recapHead', names[1]));
-    for (const [label, get, sub] of ROWS) {
-      tableEl.appendChild(cell('recapLabel' + (sub ? ' recapSub' : ''), label));
-      tableEl.appendChild(cell('recapVal', String(get(seats[0]))));
-      tableEl.appendChild(cell('recapVal', String(get(seats[1]))));
-    }
+    renderStatsTable(tableEl, seats, names);
   }
 
   if (recapBtn && endPanel && recapPanel) {
@@ -176,8 +185,11 @@
   }
 
   // playByPlay: read-only view of the shot log for js/playbyplay.js.
+  // renderStatsTable / fmtDur: shared with js/history.js so a stored match's
+  // stats render identically to the live end-of-game recap.
   window.MatchStats = {
     begin, beginShot, recordShot, snapshot, applyRemote, finalize,
     playByPlay: () => ({ log, names }),
+    renderStatsTable, fmtDur,
   };
 })();

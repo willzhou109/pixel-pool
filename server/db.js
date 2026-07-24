@@ -43,4 +43,6 @@ module.exports = {
   findUser(username) {
     return selectByName.get(username);
   },
+  /** Raw handle so feature modules (e.g. history.js) can own their own tables. */
+  db,
 };

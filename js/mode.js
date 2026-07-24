@@ -10,13 +10,13 @@
  *
  * #modeOverlay also hosts the profile panel (#profileMain, owned by
  * js/profile.js) as a sibling of #homeMain — only one is shown at a time, but
- * both live inside the same overlay as the sidebar (#homeSide) and chat bar
+ * both live inside the same overlay as the user menu (#userMenu) and chat bar
  * (#homeChat), so those two persist across home <-> profile navigation
  * instead of being torn down and rebuilt.
  *
- * The right sidebar (profile / friends / notifications) is placeholder UI for
- * features that aren't built yet, except the name button, which opens the
- * profile page (js/profile.js), and LOG OUT.
+ * The top-right user menu (avatar + name) drops down two actions: VIEW PROFILE
+ * opens the profile page (js/profile.js) — whose FRIEND LIST tab is where
+ * friends live — and LOG OUT ends the session.
  */
 (function () {
   'use strict';
@@ -31,8 +31,10 @@
   const playBtn = $('playBtn');
   const profileBtn = $('profileBtn');
   const logoutBtn = $('modeLogoutBtn');
-  const homeSide = $('homeSide');
-  const sideToggleBtn = $('sideToggleBtn');
+  const userMenu = $('userMenu');
+  const userMenuBtn = $('userMenuBtn');
+  const userMenuDrop = $('userMenuDrop');
+  const userMenuName = $('userMenuName');
   const homeMain = $('homeMain');
   const profileMain = $('profileMain');
   const tabs = Array.from(document.querySelectorAll('.gameTab'));
@@ -58,7 +60,8 @@
     currentUsername = username;
     const name = guest ? 'GUEST' : (username || 'PLAYER').toUpperCase();
     if (welcome) welcome.textContent = 'WELCOME, ' + name + '!';
-    if (profileBtn) profileBtn.textContent = name;
+    if (userMenuName) userMenuName.textContent = name;
+    setMenuOpen(false);
     if (note) note.textContent = '';
     setMode(guest ? 'offline' : 'online'); // guests can't play online
     [$('landingOverlay'), $('loginOverlay'), $('signupOverlay'), $('lobbyOverlay')]
@@ -120,40 +123,35 @@
     overlay.classList.remove('hidden');
   });
 
-  /* -------------------------------- sidebar ------------------------------- */
-  // friends / notifications are intentionally inert for now.
+  /* ------------------------------ user menu ------------------------------ */
+  // Top-right avatar+name button drops down VIEW PROFILE / LOG OUT.
+  function setMenuOpen(open) {
+    if (!userMenuDrop || !userMenuBtn) return;
+    userMenuDrop.classList.toggle('hidden', !open);
+    userMenuBtn.classList.toggle('open', open);
+    userMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  if (userMenuBtn && userMenuDrop) userMenuBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    setMenuOpen(userMenuDrop.classList.contains('hidden'));
+  });
+  // Click-away and Escape close the menu.
+  document.addEventListener('click', e => {
+    if (userMenu && !userMenu.contains(e.target)) setMenuOpen(false);
+  });
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') setMenuOpen(false); });
+
   if (profileBtn) profileBtn.addEventListener('click', () => {
+    setMenuOpen(false);
     if (window.PixelPoolProfile) window.PixelPoolProfile.show(currentUsername, guest);
   });
   logoutBtn.addEventListener('click', () => {
+    setMenuOpen(false);
     if (window.PixelPoolAuth) window.PixelPoolAuth.logout();
     if (window.PixelPoolLanding) window.PixelPoolLanding.show();
   });
 
-  // Collapse toggle: the panel folds away entirely and the same button keeps
-  // floating in the top-right corner (it lives outside #homeSide) to bring it
-  // back. State isn't reset on enter() — it stays how the player left it.
-  if (homeSide && sideToggleBtn) sideToggleBtn.addEventListener('click', () => {
-    const collapsed = homeSide.classList.toggle('collapsed');
-    sideToggleBtn.innerHTML = collapsed ? '&#9664;' : '&#9654;';
-    sideToggleBtn.setAttribute('aria-expanded', String(!collapsed));
-  });
-
-  /* ------------------------------- home chat ------------------------------ */
-  // Placeholder until the friends feature exists: same look as the in-match
-  // chat, collapsible, but sending goes nowhere (there's nobody to send to).
-  const homeChat = $('homeChat');
-  const homeChatForm = $('homeChatForm');
-  const homeChatInput = $('homeChatInput');
-  const homeChatToggle = $('homeChatToggle');
-  if (homeChatForm) homeChatForm.addEventListener('submit', e => {
-    e.preventDefault();
-    if (homeChatInput) homeChatInput.value = '';
-  });
-  if (homeChat && homeChatToggle) homeChatToggle.addEventListener('click', () => {
-    const collapsed = homeChat.classList.toggle('collapsed');
-    homeChatToggle.innerHTML = collapsed ? '&#9650;' : '&#9660;';
-  });
+  // The home chat bar is a real DM messenger now, owned by js/homechat.js.
 
   window.PixelPoolMode = { enter, showHome };
 })();

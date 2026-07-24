@@ -56,6 +56,15 @@
 
     // In-match gameplay messages (aim / shoot / snapshots / state).
     socket.on('game', msg => fire('game', msg));
+
+    // Social layer (friends + chat), forwarded straight to listeners.
+    socket.on('presence', data => fire('presence', data));            // {online:[names]} snapshot
+    socket.on('friend-online', data => fire('friend-online', data));  // {username}
+    socket.on('friend-offline', data => fire('friend-offline', data));
+    socket.on('friend-request', data => fire('friend-request', data));   // someone added me
+    socket.on('friend-accepted', data => fire('friend-accepted', data)); // they accepted my request
+    socket.on('friend-removed', data => fire('friend-removed', data));   // declined / removed / cancelled
+    socket.on('dm', msg => fire('dm', msg));                           // {id,from,to,text,at}
   }
 
   function disconnect() {
@@ -71,6 +80,9 @@
   // In-match gameplay message to the opponent (relayed by the server).
   const sendGame = msg => { if (socket) socket.emit('game', msg); };
 
+  // Send a direct message to a friend (server persists + delivers it back).
+  const sendDm = (to, text) => { if (socket) socket.emit('dm', { to, text }); };
+
   window.PixelPoolNet = {
     connect,
     disconnect,
@@ -78,6 +90,7 @@
     cancelMatch,
     leaveMatch,
     sendGame,
+    sendDm,
     on,
     get socket() { return socket; },
     get connected() { return !!(socket && socket.connected); },

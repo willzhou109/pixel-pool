@@ -488,6 +488,10 @@
     put(shade, M(new THREE.CylinderGeometry(0.08, 0.1, 0.06, 10), sm('#2a1c10'), 0, 0, 0), 0, 0.32, 0);  // cap
     shade.position.y = 2.4; lamp.add(shade);
     put(lamp, M(new THREE.SphereGeometry(0.11, 8, 6), bmat('#fff2c0'), 0, 0, 0), 0, 2.24, 0);  // glowing bulb
+    // Hangs directly above the table, so game.js's bird's-eye survey camera
+    // (foul ball-in-hand / 8-ball pocket call) hides anything tagged here —
+    // otherwise this looms in the shot, filling most of the top-down frame.
+    lamp.userData.hideOnSurveyCam = true;
     g.add(lamp);
 
     return g;

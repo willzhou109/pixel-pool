@@ -14,9 +14,19 @@
 
 const { Server } = require('socket.io');
 const { verifyToken } = require('./auth');
+const { recordMatch } = require('./history');
+const presence = require('./presence');
+const social = require('./social');
+
+// Live match bookkeeping for history recording, keyed by room:
+// { names: [seat0Username, seat1Username], startMs, recorded }.
+// Seat 0 is always the breaker (that's how the clients assign seats too).
+const liveMatches = new Map();
 
 function initRealtime(httpServer) {
   const io = new Server(httpServer);
+  // Let presence-based REST handlers (friends.js / chat.js) push to sockets.
+  presence.setIo(io);
 
   // Gate every connection on a valid session token (sent as handshake auth).
   io.use((socket, next) => {
@@ -34,6 +44,9 @@ function initRealtime(httpServer) {
     const { username } = socket.data;
     console.log(`[rt] ${username} connected (${socket.id})`);
     socket.emit('welcome', { username });
+
+    // Presence + chat (friends list, DMs) ride the same authenticated socket.
+    social.onConnect(io, socket);
 
     socket.on('find-match', () => {
       if (socket.data.room) return;                    // already in a match
@@ -56,15 +69,21 @@ function initRealtime(httpServer) {
     socket.on('leave-match', () => leaveMatch(io, socket));
 
     // Client-authoritative gameplay: relay any in-match message straight to the
-    // opponent. The server never inspects or validates it — the two clients
-    // agree on game state between themselves (see js/online.js).
+    // opponent. The server never validates gameplay — the two clients agree on
+    // game state between themselves (see js/online.js). The one message it
+    // peeks at is the authoritative end-of-game 'state' (phase 'end'), which
+    // already carries winner/reason/stats — that's when the match is recorded.
     socket.on('game', msg => {
-      if (socket.data.room) socket.to(socket.data.room).emit('game', msg);
+      const room = socket.data.room;
+      if (!room) return;
+      socket.to(room).emit('game', msg);
+      if (msg && msg.t === 'state' && msg.phase === 'end') recordEnd(room, msg);
     });
 
     socket.on('disconnect', () => {
       if (waitingId === socket.id) waitingId = null;
       leaveMatch(io, socket);
+      social.onDisconnect(io, socket);
       console.log(`[rt] ${username} disconnected`);
     });
   });
@@ -85,9 +104,29 @@ function startMatch(io, a, b) {
   // generate the identical starting layout.
   const aBreaks = Math.random() < 0.5;
   const seed = (Math.random() * 0x7fffffff) | 0;
+  liveMatches.set(room, {
+    names: aBreaks ? [a.data.username, b.data.username] : [b.data.username, a.data.username],
+    startMs: Date.now(),
+    recorded: false,
+  });
   a.emit('match-found', { room, opponent: b.data.username, youBreak: aBreaks, seed });
   b.emit('match-found', { room, opponent: a.data.username, youBreak: !aBreaks, seed });
   console.log(`[rt] match: ${a.data.username} vs ${b.data.username} (${room})`);
+}
+
+// A game in `room` reached its end state — persist it to match history (once;
+// rematches re-arm `recorded` if/when they exist, for now one end per room).
+function recordEnd(room, msg) {
+  const m = liveMatches.get(room);
+  if (!m || m.recorded) return;
+  m.recorded = true;
+  try {
+    recordMatch(m.names, msg.winner, msg.reason,
+      Math.round((Date.now() - m.startMs) / 1000), msg.stats);
+    console.log(`[rt] recorded: ${m.names[0]} vs ${m.names[1]} — seat ${msg.winner} won`);
+  } catch (e) {
+    console.error('[rt] failed to record match:', e);
+  }
 }
 
 // Remove `socket` from its match (if any) and reset both players so they can
@@ -95,6 +134,7 @@ function startMatch(io, a, b) {
 function leaveMatch(io, socket) {
   const room = socket.data.room;
   if (!room) return;
+  liveMatches.delete(room); // recording (if any) already happened at game end
 
   // Notify the opponent while both are still in the room.
   socket.to(room).emit('opponent-left', { username: socket.data.username });

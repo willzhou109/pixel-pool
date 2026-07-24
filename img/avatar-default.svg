@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <!-- Default profile picture: the classic gray head-and-shoulders
+       silhouette. Every player gets this until custom avatars exist. -->
+  <rect width="96" height="96" fill="#d2d6db"/>
+  <ellipse cx="48" cy="36" rx="17" ry="21" fill="#ffffff"/>
+  <rect x="40" y="46" width="16" height="18" fill="#ffffff"/>
+  <path d="M10 96 C13 71 25 60 48 60 S83 71 86 96 Z" fill="#ffffff"/>
+</svg>
