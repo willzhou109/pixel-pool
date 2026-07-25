@@ -513,13 +513,13 @@
     margin: 0 auto; width: 100%; max-width: calc(560px * var(--home-scale));
     display: flex; flex-direction: column;
   }
-  /* BACK returns to the previous page (js/profile.js); the logo below always
-     returns to the home screen. */
+  /* BACK sits just under the PIXEL POOL logo; it returns to the previous page
+     (js/profile.js), while the logo above always returns to the home screen. */
   #profileBack {
     align-self: flex-start; font-family: var(--px);
     font-size: calc(8px * var(--home-scale)); letter-spacing: 1px; color: var(--text-dim);
     background: rgba(255, 255, 255, 0.06); border: 2px solid var(--panel-border);
-    padding: 8px 12px; margin-bottom: 16px; cursor: pointer;
+    padding: 8px 12px; margin-top: 14px; cursor: pointer;
   }
   #profileBack:hover { border-color: var(--accent); color: var(--text); }
   #profileBack:active { transform: translate(1px, 1px); }
@@ -529,7 +529,7 @@
     background: none; border: none; padding: 0; cursor: pointer;
   }
   #profileLogo:active { transform: translate(2px, 2px); }
-  #profileContent { text-align: left; margin-top: 34px; }
+  #profileContent { text-align: left; margin-top: 22px; }
   #profileHead { display: flex; gap: 18px; align-items: flex-start; }
   /* Profile picture. Starts as the default SVG (pre-JS); js/avatarpicker.js
      paints the player's chosen emoji tile over it via the .avatarEmoji class. */
@@ -718,6 +718,12 @@
   .friendMini.good { color: #2ecc71; border-color: #2ecc71; }
   .friendMini.danger { color: #e74c3c; border-color: #e74c3c; }
   .friendMini.soon { opacity: 0.55; }  /* deferred placeholder (INVITE) */
+  /* Relationship tag on another player's friend row (js/friends.js otherFriendRow). */
+  .friendTag {
+    align-self: center; font-family: var(--px); font-size: calc(6px * var(--home-scale));
+    letter-spacing: 1px; color: var(--text-dim); padding: 6px 4px; white-space: nowrap;
+  }
+  .friendTag.isFriend { color: #2ecc71; }
   .friendEmpty { color: var(--text-dim); font-size: calc(7px * var(--home-scale)); line-height: 1.9; padding: 4px 2px; }
 
   /* Online auth (login / signup / lobby) */
@@ -845,8 +851,8 @@
 
   <div id="profileMain" class="hidden">
     <div id="profileWrap">
-    <button id="profileBack" aria-label="Back to previous page">&#8592; BACK</button>
     <button id="profileLogo" aria-label="Back to home">&#127921; PIXEL POOL</button>
+    <button id="profileBack" aria-label="Back to previous page">&#8592; BACK</button>
     <div id="profileContent">
       <div id="profileHead">
         <div id="profileAvatar"></div>

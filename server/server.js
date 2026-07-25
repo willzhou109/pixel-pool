@@ -107,9 +107,12 @@ async function handleApi(req, res, pathname, searchParams) {
 
   if (pathname === '/api/me' && req.method === 'GET') {
     const { status, body } = auth.me(bearer(req));
-    // Compose the avatar in here (rather than in auth.js) so avatar.js can keep
-    // requiring auth for its write endpoint without a circular dependency.
-    if (status === 200 && body.username) body.avatar = avatar.getAvatar(body.username);
+    // Compose the avatar + friend count in here (rather than in auth.js) so
+    // those modules can keep requiring auth without a circular dependency.
+    if (status === 200 && body.username) {
+      body.avatar = avatar.getAvatar(body.username);
+      body.friendCount = friends.friendUsernames(body.username).length;
+    }
     return sendJson(res, status, body);
   }
 
@@ -145,12 +148,20 @@ async function handleApi(req, res, pathname, searchParams) {
 
   // Public profiles (server/profiles.js): view ANOTHER player's header / stats /
   // history. Any signed-in viewer may read these; the target need not be them.
-  const profileRoute = /^\/api\/users\/([A-Za-z0-9_]{3,20})\/(summary|stats|history)$/.exec(pathname);
+  const profileRoute = /^\/api\/users\/([A-Za-z0-9_]{3,20})\/(summary|stats|history|friends)$/.exec(pathname);
   if (req.method === 'GET' && profileRoute) {
     const name = profileRoute[1], kind = profileRoute[2];
     const handler = kind === 'summary' ? profiles.summary
-      : kind === 'stats' ? profiles.stats : profiles.history;
+      : kind === 'stats' ? profiles.stats
+      : kind === 'history' ? profiles.history
+      : friends.friendsOf; // 'friends' — another player's friends, annotated for me
     const { status, body } = handler(bearer(req), name);
+    return sendJson(res, status, body);
+  }
+  // One of a player's games in full (drill-in from their profile's history).
+  const profileMatch = /^\/api\/users\/([A-Za-z0-9_]{3,20})\/match\/(\d+)$/.exec(pathname);
+  if (req.method === 'GET' && profileMatch) {
+    const { status, body } = profiles.match(bearer(req), profileMatch[1], Number(profileMatch[2]));
     return sendJson(res, status, body);
   }
 

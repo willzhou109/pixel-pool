@@ -32,7 +32,8 @@
   // Same per-tab session key as js/auth.js.
   const getToken = () => { try { return sessionStorage.getItem('pp_token'); } catch { return null; } };
 
-  let current = null; // the match detail currently shown, for the LAYOUT tab
+  let current = null;  // the match detail currently shown, for the LAYOUT tab
+  let viewUser = null; // whose history this is: null = me, else another player
 
   function fmtDate(playedAt) {
     if (!playedAt) return '—';
@@ -65,17 +66,17 @@
 
   /* --------------------------------- list --------------------------------- */
 
-  // open() with no argument shows the signed-in player's own history (rows drill
-  // into the recap). Pass a username to show another player's list — read-only,
-  // since match detail (server/history.js matchDetail) stays participant-only.
+  // open() with no argument shows the signed-in player's own history; pass a
+  // username to show another player's. Either way the rows drill into the recap
+  // (own games via /api/match/:id, another player's via /api/users/:u/match/:id).
   async function open(username) {
-    const other = username || null;
+    viewUser = username || null;
     view.classList.remove('hidden');
     detailEl.classList.add('hidden');
     listEl.classList.remove('hidden');
     listEl.innerHTML = '';
     listEl.appendChild(el('div', 'histEmpty', 'Loading…'));
-    const path = other ? '/api/users/' + encodeURIComponent(other) + '/history' : '/api/history';
+    const path = viewUser ? '/api/users/' + encodeURIComponent(viewUser) + '/history' : '/api/history';
     let matches;
     try {
       ({ matches } = await fetchJson(path));
@@ -86,19 +87,15 @@
     }
     listEl.innerHTML = '';
     if (!matches || !matches.length) {
-      listEl.appendChild(el('div', 'histEmpty', other
+      listEl.appendChild(el('div', 'histEmpty', viewUser
         ? 'No online games yet.'
         : 'No online games yet — play a match to start your history!'));
       return;
     }
     for (const m of matches) {
-      // Own games are clickable buttons (drill into the recap); another player's
-      // are plain, non-clickable rows.
-      const row = el(other ? 'div' : 'button', 'histRow');
-      if (!other) {
-        row.type = 'button';
-        row.addEventListener('click', () => openDetail(m.id));
-      }
+      const row = el('button', 'histRow');
+      row.type = 'button';
+      row.addEventListener('click', () => openDetail(m.id));
       fillRow(row, fmtDate(m.playedAt), m.opponent, m.won);
       listEl.appendChild(row);
     }
@@ -111,9 +108,14 @@
   /* -------------------------------- detail -------------------------------- */
 
   async function openDetail(id) {
+    // Own match via /api/match/:id; another player's via the profile-scoped
+    // endpoint, which shows the detail from THAT player's seat perspective.
+    const path = viewUser
+      ? '/api/users/' + encodeURIComponent(viewUser) + '/match/' + id
+      : '/api/match/' + id;
     let match;
     try {
-      match = await fetchJson('/api/match/' + id);
+      match = await fetchJson(path);
     } catch (e) {
       return; // row stays; nothing to show
     }

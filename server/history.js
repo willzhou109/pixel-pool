@@ -89,14 +89,14 @@ function history(token) {
   return { status: 200, body: { matches: listFor(username) } };
 }
 
-function matchDetail(token, id) {
-  const username = verifyToken(token);
-  if (!username) return { status: 401, body: { error: 'Not signed in.' } };
+// One match's full detail, seen from `username`'s seat — no auth (callers gate
+// access). `username` MUST be one of the two players: the recap is rendered
+// from their perspective (mySeat), and requiring participation keeps the same
+// 404 whether the match is missing or `username` wasn't in it.
+function detailFor(username, id) {
   const row = selectById.get(id);
   const lower = username.toLowerCase();
   const seat = row && (row.p0.toLowerCase() === lower ? 0 : row.p1.toLowerCase() === lower ? 1 : -1);
-  // Same 404 whether the match doesn't exist or belongs to other players —
-  // don't leak which ids are real.
   if (!row || seat === -1) return { status: 404, body: { error: 'Match not found.' } };
   let stats = null;
   try { stats = row.stats ? JSON.parse(row.stats) : null; } catch { /* corrupt row — show without stats */ }
@@ -115,4 +115,12 @@ function matchDetail(token, id) {
   };
 }
 
-module.exports = { recordMatch, history, matchDetail, listFor };
+function matchDetail(token, id) {
+  const username = verifyToken(token);
+  if (!username) return { status: 401, body: { error: 'Not signed in.' } };
+  // Same 404 whether the match doesn't exist or belongs to other players —
+  // don't leak which ids are real.
+  return detailFor(username, id);
+}
+
+module.exports = { recordMatch, history, matchDetail, listFor, detailFor };

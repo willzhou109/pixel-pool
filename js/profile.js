@@ -13,10 +13,14 @@
  * in the meta row is hard-coded to 0.
  *
  * show(username, isGuest) renders your own profile; showUser(username) renders
- * ANOTHER player's — the same page, but their header (name, avatar, rating,
- * record from /api/users/:u/summary) with the STATS + GAME HISTORY tabs showing
- * their public data and the FRIEND LIST tab hidden. From another player's
- * profile, BACK returns to your own friend list (where you clicked in).
+ * ANOTHER player's — the same page and all three tabs, but their public data
+ * (header from /api/users/:u/summary; GAME HISTORY, STATS and FRIEND LIST from
+ * the matching /api/users/:u/* endpoints). Their friend list is read-only, each
+ * person tagged by YOUR relationship to them (js/friends.js openOther).
+ *
+ * Navigation is a stack (navStack), so profile-to-profile hops (me -> dan ->
+ * dan's friend erin) let BACK step back one page at a time — restoring the tab
+ * you left each on — while the top PIXEL POOL logo always jumps home.
  */
 (function () {
   'use strict';
@@ -28,6 +32,7 @@
   const nameEl = $('profileName');
   const ratingEl = $('profileRating');
   const joinedEl = $('profileJoined');
+  const friendsMetaEl = $('profileFriends');
   const avatarEl = $('profileAvatar');
   const note = $('profileNote');
   const logoBtn = $('profileLogo');
@@ -46,20 +51,32 @@
   let viewingSelf = true;     // false while viewing another player's profile
   let currentUser = null;     // the username currently displayed
   let selfUsername = null;    // the signed-in player (captured by show())
-  let selfGuest = false;      // remembered so BACK can re-open your own profile
+  let selfGuest = false;      // remembered so navigation can re-open your own profile
+
+  // Navigation stack of pages to return to, so BACK works through a chain of
+  // profile-to-profile hops (e.g. me -> dan -> dan's friend erin -> BACK -> dan).
+  // Each entry is { home:true } or a page descriptor { username, isGuest, self }.
+  // The active page's tab is tracked on `currentPage` so BACK restores it too.
+  const navStack = [];
+  let currentPage = { home: true };
 
   // Tab strip: GAME HISTORY (js/history.js), STATS (js/careerstats.js) and
-  // FRIEND LIST (js/friends.js). On another player's profile the sub-modules are
-  // pointed at their public data (open(username)); FRIEND LIST is self-only.
+  // FRIEND LIST (js/friends.js). On another player's profile each sub-module is
+  // pointed at their public data (open(username) / openOther(username)).
   // `which` is 'history' | 'stats' | 'friends' | null.
   function selectTab(which) {
     const viewName = viewingSelf ? null : currentUser; // null => own endpoints
+    if (which && currentPage && !currentPage.home) currentPage.tab = which; // remembered for BACK
     if (tabBtns[0]) tabBtns[0].classList.toggle('sel', which === 'history');
     if (tabBtns[1]) tabBtns[1].classList.toggle('sel', which === 'stats');
     if (tabBtns[2]) tabBtns[2].classList.toggle('sel', which === 'friends');
     if (window.PoolHistory) (which === 'history' ? window.PoolHistory.open(viewName) : window.PoolHistory.hide());
     if (window.PoolCareerStats) (which === 'stats' ? window.PoolCareerStats.open(viewName) : window.PoolCareerStats.hide());
-    if (window.PixelPoolFriends) (which === 'friends' ? window.PixelPoolFriends.open() : window.PixelPoolFriends.hide());
+    if (window.PixelPoolFriends) {
+      if (which !== 'friends') window.PixelPoolFriends.hide();
+      else if (viewingSelf) window.PixelPoolFriends.open();
+      else window.PixelPoolFriends.openOther(currentUser);
+    }
   }
 
   function formatJoined(createdAt) {
@@ -80,30 +97,37 @@
     avatarEl.textContent = '';
   }
 
-  // Render your own profile.
+  // Enter your own profile (from the home user menu). Resets the nav stack with
+  // home as the only place BACK can return to.
   function show(username, isGuest, tab) {
     selfUsername = username;
     selfGuest = !!isGuest;
-    return renderProfile({ username, isGuest, self: true, tab });
+    navStack.length = 0;
+    navStack.push({ home: true });
+    currentPage = { username, isGuest: !!isGuest, self: true, tab: tab || 'history' };
+    return renderProfile(currentPage);
   }
 
-  // Render another player's profile (from a friend-list "View Profile"). Falls
-  // back to your own if the name is you.
+  // Navigate to another player's profile (from a "View Profile" link), pushing
+  // the current page so BACK returns here. If the name is you, shows your own.
   function showUser(username) {
     if (!username) return;
-    if (selfUsername && username.toLowerCase() === selfUsername.toLowerCase()) {
-      return show(selfUsername, selfGuest, 'history');
-    }
-    return renderProfile({ username, isGuest: false, self: false, tab: 'history' });
+    const isMe = selfUsername && username.toLowerCase() === selfUsername.toLowerCase();
+    navStack.push(currentPage);
+    currentPage = isMe
+      ? { username: selfUsername, isGuest: selfGuest, self: true, tab: 'history' }
+      : { username, isGuest: false, self: false, tab: 'history' };
+    return renderProfile(currentPage);
   }
+
+  const formatFriends = n => n + (n === 1 ? ' FRIEND' : ' FRIENDS');
 
   async function renderProfile({ username, isGuest, self, tab }) {
     guest = !!isGuest;
     viewingSelf = self;
     currentUser = username;
     nameEl.textContent = (isGuest ? 'GUEST' : (username || 'PLAYER')).toUpperCase();
-    // FRIEND LIST only makes sense on your own profile.
-    if (tabBtns[2]) tabBtns[2].classList.toggle('hidden', !self);
+    if (tabBtns[2]) tabBtns[2].classList.remove('hidden'); // friend list works for anyone now
     // Only your own picture is editable (shows the pencil badge).
     if (avatarEl) avatarEl.classList.toggle('editable', self && !isGuest);
     if (self) {
@@ -113,12 +137,12 @@
     }
     ratingEl.textContent = isGuest ? 'RATING: UNRATED' : 'RATING: …';
     joinedEl.textContent = isGuest ? 'No account' : 'Joined …';
+    if (friendsMetaEl) friendsMetaEl.textContent = isGuest ? '0 FRIENDS' : '… FRIENDS';
     note.textContent = '';
     homeMain.classList.add('hidden');
     profileMain.classList.remove('hidden');
     modeOverlay.classList.remove('hidden'); // should already be visible — just in case
-    // Land on GAME HISTORY, unless a caller asked for a tab (e.g. the FRIENDS
-    // sidebar button opens straight to the friend list on your own profile).
+    // Land on the requested tab (GAME HISTORY by default).
     selectTab(isGuest ? null : (tab || 'history'));
 
     if (isGuest) return;
@@ -128,17 +152,22 @@
       const path = self ? '/api/me' : '/api/users/' + encodeURIComponent(username) + '/summary';
       const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
+      // A newer navigation may have superseded this fetch — don't overwrite it.
+      if (currentUser !== username) return;
       if (res.ok) {
         joinedEl.textContent = formatJoined(data.createdAt);
         ratingEl.textContent = formatRating(data);
+        if (friendsMetaEl) friendsMetaEl.textContent = formatFriends(data.friendCount || 0);
         if (!self && window.PoolAvatar && data.avatar) window.PoolAvatar.apply(avatarEl, data.avatar);
       } else {
         joinedEl.textContent = 'Joined —';
         ratingEl.textContent = 'RATING: UNRATED';
+        if (friendsMetaEl) friendsMetaEl.textContent = '0 FRIENDS';
       }
     } catch {
       joinedEl.textContent = 'Joined —';
       ratingEl.textContent = 'RATING: UNRATED';
+      if (friendsMetaEl) friendsMetaEl.textContent = '0 FRIENDS';
     }
   }
 
@@ -150,20 +179,22 @@
     return s;
   }
 
-  // The top PIXEL POOL logo always returns to the home screen.
+  // The top PIXEL POOL logo always returns to the home screen (and clears the
+  // navigation stack — a fresh profile visit starts over).
   function goHome() {
     profileMain.classList.add('hidden');
     homeMain.classList.remove('hidden');
+    navStack.length = 0;
+    currentPage = { home: true };
   }
 
-  // BACK returns to the previous page: from another player's profile that's your
-  // own friend list (where the "View Profile" link was); from your own, home.
+  // BACK returns to the previous page on the stack: an earlier profile (with the
+  // tab you left it on), or home.
   function back() {
-    if (!viewingSelf && selfUsername) {
-      show(selfUsername, selfGuest, 'friends');
-      return;
-    }
-    goHome();
+    const prev = navStack.pop();
+    if (!prev || prev.home) { goHome(); return; }
+    currentPage = prev;
+    renderProfile(prev);
   }
 
   // GAME HISTORY and FRIEND LIST are live; STATS is still a stub.

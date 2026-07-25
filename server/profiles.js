@@ -7,13 +7,14 @@
  * (career totals) and history (game list).
  *
  * server.js routes here:
- *   GET /api/users/:username/summary  -> header: name, joined, rating, W/L, avatar
- *   GET /api/users/:username/stats    -> lifetime career totals
- *   GET /api/users/:username/history  -> the player's game list (list only)
+ *   GET /api/users/:username/summary   -> header: name, joined, rating, W/L, avatar
+ *   GET /api/users/:username/stats     -> lifetime career totals
+ *   GET /api/users/:username/history   -> the player's game list
+ *   GET /api/users/:username/match/:id -> one of the player's games in full
  *
- * All three require the *viewer* to be signed in (any account), not to be that
- * user. Match detail is deliberately NOT exposed here — history.matchDetail
- * stays participant-only, so another player's game list isn't drillable.
+ * All require the *viewer* to be signed in (any account), not to be that user.
+ * Match detail is scoped through the profile: history.detailFor requires the
+ * profile user to be a participant, so you only see games that player was in.
  */
 'use strict';
 
@@ -23,6 +24,7 @@ const ratings = require('./ratings');
 const avatar = require('./avatar');
 const stats = require('./stats');
 const history = require('./history');
+const friends = require('./friends');
 
 // Resolve the request: the viewer must be signed in, and the target must exist.
 // Returns { user } on success or { error: {status, body} } to send back.
@@ -47,6 +49,7 @@ function summary(token, name) {
       wins: r.wins,
       losses: r.losses,
       avatar: avatar.getAvatar(user.username),
+      friendCount: friends.friendUsernames(user.username).length,
     },
   };
 }
@@ -63,4 +66,12 @@ function historyFor(token, name) {
   return { status: 200, body: { matches: history.listFor(user.username) } };
 }
 
-module.exports = { summary, stats: statsFor, history: historyFor };
+// One of `name`'s games in full, from their seat perspective. 404 if that
+// player wasn't in the match — so this only ever exposes their own games.
+function matchFor(token, name, id) {
+  const { user, error } = resolve(token, name);
+  if (error) return error;
+  return history.detailFor(user.username, id);
+}
+
+module.exports = { summary, stats: statsFor, history: historyFor, match: matchFor };

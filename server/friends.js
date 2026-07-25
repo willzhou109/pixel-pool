@@ -93,6 +93,31 @@ function list(token) {
   return { status: 200, body: { friends, incoming, outgoing } };
 }
 
+// Another player's friends, each annotated with MY relationship to them so the
+// UI can show friends I share vs. people I could add. `state` mirrors search():
+// 'self' | 'friends' | 'outgoing' | 'incoming' | 'none'. Any signed-in viewer
+// may read this (it's a public-profile view); the target need not be them.
+function friendsOf(token, name) {
+  const me = verifyToken(token);
+  if (!me) return { status: 401, body: { error: 'Not signed in.' } };
+  const target = findUser(String(name || '').trim());
+  if (!target) return { status: 404, body: { error: 'No player with that name.' } };
+  const lower = me.toLowerCase();
+  const friends = friendUsernames(target.username).map(u => {
+    let state;
+    if (u.toLowerCase() === lower) state = 'self';
+    else {
+      const rel = relation(me, u);
+      state = !rel ? 'none'
+        : rel.status === 'accepted' ? 'friends'
+        : rel.requester.toLowerCase() === lower ? 'outgoing' : 'incoming';
+    }
+    return { username: u, online: presence.isOnline(u), state };
+  });
+  friends.sort((a, b) => (b.online - a.online) || a.username.localeCompare(b.username));
+  return { status: 200, body: { owner: target.username, friends } };
+}
+
 function search(token, q) {
   const me = verifyToken(token);
   if (!me) return { status: 401, body: { error: 'Not signed in.' } };
@@ -164,4 +189,4 @@ function decline(token, body) {
 
 function remove(token, body) { return decline(token, body); } // same effect: drop the edge
 
-module.exports = { list, search, request, accept, decline, remove, areFriends, friendUsernames };
+module.exports = { list, search, friendsOf, request, accept, decline, remove, areFriends, friendUsernames };

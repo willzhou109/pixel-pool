@@ -32,6 +32,12 @@
   const subs = new Set();
   const notify = () => { updateNotifDot(); subs.forEach(fn => { try { fn(store); } catch (e) { console.error(e); } }); };
 
+  // When the FRIEND LIST tab is showing ANOTHER player's friends, this holds
+  // their username; null means it's showing my own. In "other" mode the store
+  // still updates in the background (for the notif dot), but the my-friends
+  // renderer is suppressed so it can't clobber the other player's list.
+  let otherTarget = null;
+
   const lower = s => String(s || '').toLowerCase();
   const findFriend = name => store.friends.find(f => lower(f.username) === lower(name));
   const isOnline = name => { const f = findFriend(name); return !!(f && f.online); };
@@ -55,7 +61,7 @@
       store.incoming = data.incoming || [];
       store.outgoing = data.outgoing || [];
       notify();
-      if (!view.classList.contains('hidden')) render();
+      if (!otherTarget && !view.classList.contains('hidden')) render();
     } catch { /* server unreachable — keep whatever we had */ }
   }
 
@@ -67,7 +73,7 @@
     Net.on('presence', data => {
       const set = new Set((data && data.online || []).map(lower));
       store.friends.forEach(f => { f.online = set.has(lower(f.username)); });
-      notify(); if (!view.classList.contains('hidden')) render();
+      notify(); if (!otherTarget && !view.classList.contains('hidden')) render();
     });
     Net.on('friend-online', d => setOnline(d && d.username, true));
     Net.on('friend-offline', d => setOnline(d && d.username, false));
@@ -82,7 +88,7 @@
     if (!f) return;
     f.online = on;
     notify();
-    if (!view.classList.contains('hidden')) render();
+    if (!otherTarget && !view.classList.contains('hidden')) render();
   }
 
   /* ------------------------------- notif dot ------------------------------ */
@@ -90,15 +96,13 @@
   // (#notifDot) and one on the FRIEND LIST tab (#friendReqDot).
   const notifDot = $('notifDot');
   const friendReqDot = $('friendReqDot');
-  const profileFriends = $('profileFriends');
+  // The #profileFriends meta count is owned by js/profile.js now (it must reflect
+  // whichever profile is open — yours or another player's — from that profile's
+  // summary, not always your own count).
   function updateNotifDot() {
     const has = store.incoming.length > 0;
     if (notifDot) notifDot.classList.toggle('show', has);
     if (friendReqDot) friendReqDot.classList.toggle('show', has);
-    if (profileFriends) {
-      const n = store.friends.length;
-      profileFriends.textContent = n + (n === 1 ? ' FRIEND' : ' FRIENDS');
-    }
   }
 
   /* ------------------------------- tab UI --------------------------------- */
@@ -128,7 +132,6 @@
     const left = el('div', 'friendWho');
     left.appendChild(el('span', 'presDot' + (f.online ? ' on' : '')));
     left.appendChild(el('span', 'friendName', f.username));
-    left.appendChild(el('span', 'friendStat', f.online ? 'ONLINE' : 'OFFLINE'));
     row.appendChild(left);
     const acts = el('div', 'friendActs');
 
@@ -173,7 +176,7 @@
   }
 
   function render() {
-    if (missing) return;
+    if (missing || otherTarget) return; // in "other" mode renderOther() draws the list
     // Incoming requests
     reqInList.innerHTML = '';
     store.incoming.forEach(r => reqInList.appendChild(reqRow(r.username, 'in')));
@@ -262,19 +265,108 @@
     });
   }
 
+  /* --------------------- another player's friend list --------------------- */
+  // The add box + request sections are "my account" management — hidden when
+  // browsing someone else's friends (there we show their friends, read-only,
+  // each tagged by MY relationship to them).
+  function setMyControls(visible) {
+    if (addForm) addForm.classList.toggle('hidden', !visible);
+    if (!visible) {
+      if (searchResults) { searchResults.innerHTML = ''; searchResults.classList.add('hidden'); }
+      if (addNote) addNote.textContent = '';
+      if (reqInSec) reqInSec.classList.add('hidden');
+      if (reqOutSec) reqOutSec.classList.add('hidden');
+    }
+  }
+
+  const OTHER_TAG = { friends: 'FRIENDS', outgoing: 'SENT', incoming: 'WANTS TO ADD YOU', self: 'YOU' };
+
+  // A row in another player's friend list: online dot + name, then a control
+  // that differs by whether I've added them — ADD (none), ACCEPT (they've asked
+  // me), or a tag (already friends / request sent / that's me). Always a VIEW
+  // PROFILE shortcut so you can keep browsing.
+  function otherFriendRow(f) {
+    const row = el('div', 'friendRow');
+    const left = el('div', 'friendWho');
+    left.appendChild(el('span', 'presDot' + (f.online ? ' on' : '')));
+    left.appendChild(el('span', 'friendName', f.username));
+    row.appendChild(left);
+
+    const acts = el('div', 'friendActs');
+    const prof = el('button', 'friendMini', 'VIEW PROFILE'); prof.type = 'button';
+    prof.addEventListener('click', () => {
+      if (window.PixelPoolProfile) window.PixelPoolProfile.showUser(f.username);
+    });
+    if (f.state === 'none') {
+      const add = el('button', 'friendMini good', 'ADD'); add.type = 'button';
+      add.addEventListener('click', () => actOther('/api/friends/request', f.username));
+      acts.appendChild(add);
+    } else if (f.state === 'incoming') {
+      const ok = el('button', 'friendMini good', 'ACCEPT'); ok.type = 'button';
+      ok.addEventListener('click', () => actOther('/api/friends/accept', f.username));
+      acts.appendChild(ok);
+    } else {
+      const tagCls = f.state === 'friends' ? 'friendTag isFriend' : 'friendTag';
+      acts.appendChild(el('span', tagCls, OTHER_TAG[f.state] || ''));
+    }
+    acts.appendChild(prof);
+    row.appendChild(acts);
+    return row;
+  }
+
+  // A friend action taken from another player's list: send/accept, then refresh
+  // both my own store (for the notif dot) and the annotated list I'm viewing.
+  async function actOther(path, username) {
+    try { await fetchJson(path, { method: 'POST', body: JSON.stringify({ username }) }); }
+    catch { /* transient — the re-fetch below re-syncs state either way */ }
+    refresh(); // updates my store + dot in the background (render() is suppressed)
+    if (otherTarget) openOther(otherTarget);
+  }
+
+  function renderOther(friends) {
+    friendRows.innerHTML = '';
+    if (!friends.length) {
+      friendRows.appendChild(el('div', 'friendEmpty', 'No friends yet.'));
+    } else {
+      friends.forEach(f => friendRows.appendChild(otherFriendRow(f)));
+    }
+    if (friendCount) friendCount.textContent = friends.length ? '(' + friends.length + ')' : '';
+  }
+
   /* ------------------------------ public API ------------------------------ */
   function open() {
+    otherTarget = null;
     if (view) view.classList.remove('hidden');
-    if (addNote) addNote.textContent = '';
-    if (searchResults) { searchResults.innerHTML = ''; searchResults.classList.add('hidden'); }
+    setMyControls(true);
     if (addInput) addInput.value = '';
     render();
     refresh();
   }
+
+  // Show another player's friend list (read-only, annotated for me).
+  async function openOther(username) {
+    if (missing || !username) return;
+    otherTarget = username;
+    if (view) view.classList.remove('hidden');
+    setMyControls(false);
+    friendRows.innerHTML = '';
+    friendRows.appendChild(el('div', 'friendEmpty', 'Loading…'));
+    if (friendCount) friendCount.textContent = '';
+    let data;
+    try {
+      data = await fetchJson('/api/users/' + encodeURIComponent(username) + '/friends');
+    } catch {
+      if (otherTarget === username) { friendRows.innerHTML = ''; friendRows.appendChild(el('div', 'friendEmpty', 'Couldn’t load friends.')); }
+      return;
+    }
+    if (otherTarget !== username) return; // tab/profile switched while fetching
+    renderOther(data.friends || []);
+  }
+
   function hide() { if (view) view.classList.add('hidden'); }
 
   window.PixelPoolFriends = {
-    open, hide, refresh,
+    open, openOther, hide, refresh,
     getFriends: () => store.friends.slice(),
     isOnline, isFriend,
     hasIncoming: () => store.incoming.length > 0,
