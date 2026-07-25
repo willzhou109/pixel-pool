@@ -963,6 +963,8 @@ const players = [
 // stream it out (aim → shoot → ball snapshots → authoritative post-shot state);
 // on the opponent's turn you run no physics and just render what they send.
 let onlineMode = false;
+let offlineNames = null;        // players' offline names, stashed while online so
+                               // they're restored (not left as the opponent's) after
 let mySeat = 0;                 // which players[] index is me
 let netSink = null;            // (msg) => send to opponent (set by online.js)
 let netExit = null;           // () => return to lobby (set by online.js)
@@ -1453,6 +1455,10 @@ function updateGhostCue() {
 }
 
 function startOnline(opts) {
+  // Stash the offline names before overwriting them with the online usernames,
+  // so returning to a local game restores them instead of showing the opponent.
+  // Guard so a back-to-back online match doesn't stash the previous opponent's.
+  if (!onlineMode) offlineNames = [players[0].cfg.name, players[1].cfg.name];
   onlineMode = true;
   mySeat = opts.mySeat | 0;
   rng = mulberry32(opts.seed >>> 0);
@@ -1467,6 +1473,7 @@ function startOnline(opts) {
   striking = false; stick.visible = false; lastEnd = null; lastAimKey = '';
   setCalledPocket(-1);
   pinnedMsg = null; // clear any prompt pinned from a previous game
+  showRating(null); // clear any Elo swing left from a previous match
   state = S.AIM; wasMoving = false;
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS;
   yawBeforeSurvey = null; // a fresh match starts clean, never mid-survey
@@ -1495,6 +1502,12 @@ function startOnline(opts) {
 
 function endOnline() {
   onlineMode = false; rng = Math.random;
+  // Restore the offline player names the online usernames replaced.
+  if (offlineNames) {
+    players[0].cfg.name = offlineNames[0];
+    players[1].cfg.name = offlineNames[1];
+    offlineNames = null;
+  }
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false;
   document.getElementById('endOverlay').classList.add('hidden');
@@ -1506,11 +1519,28 @@ function endOnline() {
   cam.goal.set(0, TABLE_Y, 0); cam.radius = 3.2; cam.pitch = 0.5;
 }
 
+// Show the local player's Elo swing on the end screen. Called by online.js when
+// the server's authoritative 'rating' event arrives (shortly after game end).
+// `info` is { rating, delta } for THIS player, or null to clear.
+function showRating(info) {
+  const el = document.getElementById('endRating');
+  if (!el) return;
+  if (!info || typeof info.delta !== 'number') { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  const up = info.delta >= 0;
+  const sign = up ? '+' : '';
+  el.innerHTML =
+    `RATING <span class="eloNew">${info.rating}</span> ` +
+    `<span class="eloDelta ${up ? 'eloUp' : 'eloDown'}">(${sign}${info.delta})</span>`;
+  el.classList.remove('hidden');
+}
+
 window.PoolNetGame = {
   startOnline, endOnline, apply,
   isOnline: () => onlineMode,
+  isOver: () => state === S.END,
   setSink(fn) { netSink = fn; },
   onExit(fn) { netExit = fn; },
+  showRating,
 };
 
 /* ================================== UI ================================== */

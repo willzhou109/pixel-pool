@@ -57,6 +57,10 @@
     // In-match gameplay messages (aim / shoot / snapshots / state).
     socket.on('game', msg => fire('game', msg));
 
+    // Elo rating change pushed by the server when a match ends.
+    // { ratings: { <username>: { rating, delta } } }
+    socket.on('rating', data => fire('rating', data));
+
     // Social layer (friends + chat), forwarded straight to listeners.
     socket.on('presence', data => fire('presence', data));            // {online:[names]} snapshot
     socket.on('friend-online', data => fire('friend-online', data));  // {username}

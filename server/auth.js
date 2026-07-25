@@ -11,6 +11,7 @@
 
 const crypto = require('node:crypto');
 const { createUser, findUser } = require('./db');
+const { getRating } = require('./ratings');
 
 /* --------------------------------- secret -------------------------------- */
 // Signing secret for session tokens. Set PP_SECRET in the environment for a
@@ -123,7 +124,18 @@ function me(token) {
   const username = verifyToken(token);
   if (!username) return { status: 401, body: { error: 'Not signed in.' } };
   const user = findUser(username);
-  return { status: 200, body: { username, createdAt: user ? user.created_at : null } };
+  const r = getRating(username);
+  return {
+    status: 200,
+    body: {
+      username,
+      createdAt: user ? user.created_at : null,
+      rating: r.rating,
+      games: r.games,
+      wins: r.wins,
+      losses: r.losses,
+    },
+  };
 }
 
 module.exports = { signup, login, me, verifyToken };

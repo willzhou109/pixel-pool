@@ -65,15 +65,20 @@
 
   /* --------------------------------- list --------------------------------- */
 
-  async function open() {
+  // open() with no argument shows the signed-in player's own history (rows drill
+  // into the recap). Pass a username to show another player's list — read-only,
+  // since match detail (server/history.js matchDetail) stays participant-only.
+  async function open(username) {
+    const other = username || null;
     view.classList.remove('hidden');
     detailEl.classList.add('hidden');
     listEl.classList.remove('hidden');
     listEl.innerHTML = '';
     listEl.appendChild(el('div', 'histEmpty', 'Loading…'));
+    const path = other ? '/api/users/' + encodeURIComponent(other) + '/history' : '/api/history';
     let matches;
     try {
-      ({ matches } = await fetchJson('/api/history'));
+      ({ matches } = await fetchJson(path));
     } catch (e) {
       listEl.innerHTML = '';
       listEl.appendChild(el('div', 'histEmpty', 'Couldn’t load game history. Is the server running?'));
@@ -81,14 +86,20 @@
     }
     listEl.innerHTML = '';
     if (!matches || !matches.length) {
-      listEl.appendChild(el('div', 'histEmpty', 'No online games yet — play a match to start your history!'));
+      listEl.appendChild(el('div', 'histEmpty', other
+        ? 'No online games yet.'
+        : 'No online games yet — play a match to start your history!'));
       return;
     }
     for (const m of matches) {
-      const row = el('button', 'histRow');
-      row.type = 'button';
+      // Own games are clickable buttons (drill into the recap); another player's
+      // are plain, non-clickable rows.
+      const row = el(other ? 'div' : 'button', 'histRow');
+      if (!other) {
+        row.type = 'button';
+        row.addEventListener('click', () => openDetail(m.id));
+      }
       fillRow(row, fmtDate(m.playedAt), m.opponent, m.won);
-      row.addEventListener('click', () => openDetail(m.id));
       listEl.appendChild(row);
     }
   }
@@ -133,12 +144,17 @@
     }
   }
 
-  tabStats.addEventListener('click', () => showTab(false));
-  tabLayout.addEventListener('click', () => showTab(true));
-  backBtn.addEventListener('click', () => {
+  function backToList() {
     detailEl.classList.add('hidden');
     listEl.classList.remove('hidden');
-  });
+  }
+
+  tabStats.addEventListener('click', () => showTab(false));
+  tabLayout.addEventListener('click', () => showTab(true));
+  backBtn.addEventListener('click', backToList);
+  // Clicking the game's own row again (the header of its detail) returns to the
+  // list — the same row you clicked to open it toggles you back.
+  detailRow.addEventListener('click', backToList);
 
   window.PoolHistory = { open, hide };
 })();

@@ -66,11 +66,12 @@ function recordMatch(names, winner, reason, durationSec, stats) {
 // Both take the bearer token and return { status, body } like auth.js does,
 // so server.js stays a dumb transport.
 
-function history(token) {
-  const username = verifyToken(token);
-  if (!username) return { status: 401, body: { error: 'Not signed in.' } };
+// One player's game list (newest first), personalized to their seat — no auth
+// (callers decide who may see it; the list itself is not sensitive, but match
+// *detail* stays participant-only via matchDetail below).
+function listFor(username) {
   const lower = username.toLowerCase();
-  const matches = selectForUser.all(username, username).map(r => {
+  return selectForUser.all(username, username).map(r => {
     const seat = r.p0.toLowerCase() === lower ? 0 : 1;
     return {
       id: r.id,
@@ -80,7 +81,12 @@ function history(token) {
       playedAt: r.played_at,
     };
   });
-  return { status: 200, body: { matches } };
+}
+
+function history(token) {
+  const username = verifyToken(token);
+  if (!username) return { status: 401, body: { error: 'Not signed in.' } };
+  return { status: 200, body: { matches: listFor(username) } };
 }
 
 function matchDetail(token, id) {
@@ -109,4 +115,4 @@ function matchDetail(token, id) {
   };
 }
 
-module.exports = { recordMatch, history, matchDetail };
+module.exports = { recordMatch, history, matchDetail, listFor };

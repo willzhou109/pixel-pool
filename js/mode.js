@@ -61,6 +61,8 @@
     const name = guest ? 'GUEST' : (username || 'PLAYER').toUpperCase();
     if (welcome) welcome.textContent = 'WELCOME, ' + name + '!';
     if (userMenuName) userMenuName.textContent = name;
+    // Paint the player's chosen avatar into the user menu + profile (js/avatarpicker.js).
+    if (window.PoolAvatar) window.PoolAvatar.loadMine();
     setMenuOpen(false);
     if (note) note.textContent = '';
     setMode(guest ? 'offline' : 'online'); // guests can't play online

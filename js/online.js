@@ -51,8 +51,23 @@
     Game.apply(msg);
   });
 
+  // The server settled the match's Elo — pull out this player's swing and show
+  // it on the end screen. Keyed by username; myUsername comes from 'welcome'.
+  Net.on('rating', data => {
+    if (!inMatch || !data || !data.ratings) return;
+    const mine = data.ratings[myUsername];
+    if (mine && typeof Game.showRating === 'function') Game.showRating(mine);
+  });
+
   // Opponent bailed, or our own connection dropped mid-match → back to lobby.
-  Net.on('opponent-left', () => { if (inMatch) toLobby('Opponent left the match.'); });
+  // But once the game is over, both players are sitting on the end screen; the
+  // opponent quitting (or hitting rematch) shouldn't drag us out of our own
+  // recap — only a mid-game departure ends the match for the player left behind.
+  Net.on('opponent-left', () => {
+    if (!inMatch) return;
+    if (Game.isOver && Game.isOver()) return;
+    toLobby('Opponent left the match.');
+  });
   Net.on('status', kind => {
     if (inMatch && (kind === 'disconnected' || kind === 'error')) toLobby('Disconnected.');
   });

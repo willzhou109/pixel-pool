@@ -15,6 +15,7 @@
 const { Server } = require('socket.io');
 const { verifyToken } = require('./auth');
 const { recordMatch } = require('./history');
+const { applyResult } = require('./ratings');
 const presence = require('./presence');
 const social = require('./social');
 
@@ -77,7 +78,7 @@ function initRealtime(httpServer) {
       const room = socket.data.room;
       if (!room) return;
       socket.to(room).emit('game', msg);
-      if (msg && msg.t === 'state' && msg.phase === 'end') recordEnd(room, msg);
+      if (msg && msg.t === 'state' && msg.phase === 'end') recordEnd(io, room, msg);
     });
 
     socket.on('disconnect', () => {
@@ -114,11 +115,13 @@ function startMatch(io, a, b) {
   console.log(`[rt] match: ${a.data.username} vs ${b.data.username} (${room})`);
 }
 
-// A game in `room` reached its end state — persist it to match history (once;
-// rematches re-arm `recorded` if/when they exist, for now one end per room).
-function recordEnd(room, msg) {
+// A game in `room` reached its end state — persist it to match history and
+// update both players' Elo ratings (once; rematches re-arm `recorded` if/when
+// they exist, for now one end per room).
+function recordEnd(io, room, msg) {
   const m = liveMatches.get(room);
   if (!m || m.recorded) return;
+  if (msg.winner !== 0 && msg.winner !== 1) return; // only decisive games count
   m.recorded = true;
   try {
     recordMatch(m.names, msg.winner, msg.reason,
@@ -126,6 +129,21 @@ function recordEnd(room, msg) {
     console.log(`[rt] recorded: ${m.names[0]} vs ${m.names[1]} — seat ${msg.winner} won`);
   } catch (e) {
     console.error('[rt] failed to record match:', e);
+  }
+  // Elo update, keyed by seat: msg.winner is the winning seat (0 or 1), and
+  // m.names[seat] is that seat's username. Echo the change to both clients so
+  // the end screen can show each player their own +/- rating swing.
+  try {
+    const { winner, loser } = applyResult(m.names[msg.winner], m.names[1 - msg.winner]);
+    const ratings = {
+      [winner.username]: { rating: winner.after, delta: winner.delta },
+      [loser.username]: { rating: loser.after, delta: loser.delta },
+    };
+    io.to(room).emit('rating', { ratings });
+    console.log(`[rt] elo: ${winner.username} ${winner.delta >= 0 ? '+' : ''}${winner.delta} ` +
+      `(${winner.after}), ${loser.username} ${loser.delta} (${loser.after})`);
+  } catch (e) {
+    console.error('[rt] failed to update ratings:', e);
   }
 }
 

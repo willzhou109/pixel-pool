@@ -321,6 +321,11 @@
   #endPanel { text-align: center; }
   #endTitle { font-size: 22px; line-height: 1.5; margin-bottom: 14px; color: var(--accent); text-shadow: 3px 3px 0 #000; }
   #endReason { color: var(--text-dim); font-size: 9px; line-height: 1.9; margin-bottom: 6px; }
+  #endRating { font-size: 11px; line-height: 1.6; margin-bottom: 14px; color: var(--text-dim); }
+  #endRating .eloDelta { font-weight: bold; }
+  #endRating .eloUp { color: #57d977; }
+  #endRating .eloDown { color: #e2586b; }
+  #endRating .eloNew { color: var(--accent); }
 
   /* End-of-game recap panel (js/stats.js + js/playbyplay.js) — a sibling of
      #endPanel inside #endOverlay; the GAME RECAP / BACK buttons swap the two.
@@ -508,6 +513,16 @@
     margin: 0 auto; width: 100%; max-width: calc(560px * var(--home-scale));
     display: flex; flex-direction: column;
   }
+  /* BACK returns to the previous page (js/profile.js); the logo below always
+     returns to the home screen. */
+  #profileBack {
+    align-self: flex-start; font-family: var(--px);
+    font-size: calc(8px * var(--home-scale)); letter-spacing: 1px; color: var(--text-dim);
+    background: rgba(255, 255, 255, 0.06); border: 2px solid var(--panel-border);
+    padding: 8px 12px; margin-bottom: 16px; cursor: pointer;
+  }
+  #profileBack:hover { border-color: var(--accent); color: var(--text); }
+  #profileBack:active { transform: translate(1px, 1px); }
   #profileLogo {
     align-self: flex-start; font-family: var(--px);
     font-size: calc(22px * var(--home-scale)); line-height: 1.5; color: var(--accent); text-shadow: 3px 3px 0 #000;
@@ -516,13 +531,48 @@
   #profileLogo:active { transform: translate(2px, 2px); }
   #profileContent { text-align: left; margin-top: 34px; }
   #profileHead { display: flex; gap: 18px; align-items: flex-start; }
-  /* Default profile picture (img/avatar-default.svg) — same for everyone,
-     not player-changeable yet. */
+  /* Profile picture. Starts as the default SVG (pre-JS); js/avatarpicker.js
+     paints the player's chosen emoji tile over it via the .avatarEmoji class. */
   #profileAvatar {
-    flex: none; width: 84px; height: 84px;
+    flex: none; width: 84px; height: 84px; position: relative;
     background: #d2d6db url('img/avatar-default.svg') center / cover no-repeat;
     border: 3px solid var(--panel-border);
   }
+  #profileAvatar.avatarEmoji { font-size: 46px; }
+  /* Signed-in players can click to change it — show a pencil badge + hover ring. */
+  #profileAvatar.editable { cursor: pointer; }
+  #profileAvatar.editable:hover { border-color: var(--accent); }
+  #profileAvatar.editable::after {
+    content: '\270E'; position: absolute; right: -7px; bottom: -7px;
+    width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; background: var(--accent); color: #10141e;
+    border: 2px solid #10141e; box-shadow: 2px 2px 0 rgba(0,0,0,0.5);
+  }
+  /* Shared emoji-avatar rendering (user menu, profile, picker preview). */
+  .avatarEmoji {
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1; background-repeat: no-repeat;
+  }
+  #userAvatar.avatarEmoji { font-size: 16px; }
+
+  /* Avatar picker (js/avatarpicker.js). */
+  #avatarPanel { max-width: 440px; text-align: center; }
+  #avatarPreview {
+    width: 96px; height: 96px; margin: 2px auto 6px; font-size: 52px;
+    border: 3px solid var(--panel-border);
+  }
+  .avatarPickLabel { font-size: 8px; color: var(--text-dim); text-align: left; margin: 14px 0 8px; }
+  #avatarEmojiGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .avatarEmojiOpt {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 20px; line-height: 1; padding: 0; cursor: pointer;
+    background: rgba(0, 0, 0, 0.3); border: 3px solid var(--panel-border);
+    image-rendering: pixelated;
+  }
+  .avatarEmojiOpt:hover { border-color: var(--accent); }
+  .avatarEmojiOpt.sel { border-color: var(--accent); box-shadow: 0 0 0 2px #fff; }
+  #avatarColorRow { justify-content: flex-start; }
+  .avatarColorSw { width: 34px; height: 34px; }
   #profileInfo { flex: 1; min-width: 0; }
   #profileNameRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #profileName { font-size: calc(15px * var(--home-scale)); color: var(--accent); text-shadow: 2px 2px 0 #000; }
@@ -570,6 +620,10 @@
   button.histRow { cursor: pointer; }
   button.histRow:hover { border-color: var(--accent); }
   button.histRow:active { transform: translate(1px, 1px); }
+  /* The detail view's header is the same game row — clickable to go back. */
+  #histDetailRow { cursor: pointer; }
+  #histDetailRow:hover { border-color: var(--accent); }
+  #histDetailRow:active { transform: translate(1px, 1px); }
   .histDate { color: var(--text-dim); font-size: calc(7px * var(--home-scale)); white-space: nowrap; }
   .histVs { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .histRes { font-size: calc(13px * var(--home-scale)); text-shadow: 2px 2px 0 #000; }
@@ -587,6 +641,36 @@
   #historyDetail .recapLabel,
   #historyDetail .pbpCaption { font-size: calc(7px * var(--home-scale)); }
   #historyDetail .pbpTurn { font-size: calc(9px * var(--home-scale)); }
+
+  /* STATS tab (js/careerstats.js): lifetime record tiles + a single-value
+     career stat table reusing the recap's .recapLabel / .recapVal styling. */
+  #statsView { margin-top: 16px; max-width: calc(540px * var(--home-scale)); }
+  #careerRecord {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px;
+  }
+  .recordTile {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 14px 6px; text-align: center;
+    background: rgba(0, 0, 0, 0.35); border: 3px solid var(--panel-border);
+  }
+  .recordNum { font-size: calc(16px * var(--home-scale)); color: var(--text); text-shadow: 2px 2px 0 #000; }
+  .recordLabel { font-size: calc(6px * var(--home-scale)); color: var(--text-dim); }
+  .recordTile.rWin .recordNum { color: #2ecc71; }
+  .recordTile.rLoss .recordNum { color: #e74c3c; }
+  .recordTile.rRate .recordNum { color: var(--accent); }
+  .careerTable {
+    display: grid; grid-template-columns: 2fr 1fr; text-align: left;
+    border: 3px solid var(--panel-border); background: rgba(0, 0, 0, 0.28);
+  }
+  .careerTable > div {
+    display: flex; align-items: center; padding: 9px 12px;
+    font-size: calc(8px * var(--home-scale)); line-height: 1.5;
+    border-bottom: 2px solid rgba(58, 67, 88, 0.45);
+  }
+  .careerTable > div:nth-last-child(-n+2) { border-bottom: none; }
+  .careerTable .recapLabel { font-size: calc(7px * var(--home-scale)); }
+  .careerTable .recapVal { justify-content: flex-end; }
+  .careerTable > div.recapSub { padding-left: 28px; }
 
   /* FRIEND LIST tab (js/friends.js): add box + search results, pending
      request sections, and the friends list with online dots + actions. */
@@ -623,15 +707,17 @@
   }
   .friendRow .friendName { flex: 1; }
   .friendStat { font-size: calc(6px * var(--home-scale)); color: var(--text-dim); letter-spacing: 1px; }
-  .friendActs { display: flex; gap: 6px; flex: none; }
+  .friendActs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .friendMini {
     font-family: var(--px); font-size: calc(6px * var(--home-scale)); letter-spacing: 1px;
     background: rgba(255,255,255,0.06); border: 2px solid var(--panel-border);
-    color: var(--text); padding: 7px 9px; cursor: pointer;
+    color: var(--text); padding: 7px 9px; cursor: pointer; white-space: nowrap;
   }
+  .friendMini:hover { border-color: var(--accent); }
   .friendMini:active { transform: translate(1px, 1px); }
   .friendMini.good { color: #2ecc71; border-color: #2ecc71; }
   .friendMini.danger { color: #e74c3c; border-color: #e74c3c; }
+  .friendMini.soon { opacity: 0.55; }  /* deferred placeholder (INVITE) */
   .friendEmpty { color: var(--text-dim); font-size: calc(7px * var(--home-scale)); line-height: 1.9; padding: 4px 2px; }
 
   /* Online auth (login / signup / lobby) */
@@ -759,6 +845,7 @@
 
   <div id="profileMain" class="hidden">
     <div id="profileWrap">
+    <button id="profileBack" aria-label="Back to previous page">&#8592; BACK</button>
     <button id="profileLogo" aria-label="Back to home">&#127921; PIXEL POOL</button>
     <div id="profileContent">
       <div id="profileHead">
@@ -798,6 +885,14 @@
           <div id="histLayout" class="pbpList hidden"></div>
           <button class="bigBtn ghostBtn" id="historyBackBtn">BACK</button>
         </div>
+      </div>
+
+      <!-- STATS tab (js/careerstats.js): lifetime W/L/win-rate record, then the
+           recap-style tallies (shots, pots, fouls, streak) summed over all games. -->
+      <div id="statsView" class="hidden">
+        <div id="careerRecord"></div>
+        <div id="careerTable" class="careerTable"></div>
+        <div id="careerEmpty" class="histEmpty hidden"></div>
       </div>
 
       <!-- FRIEND LIST tab (js/friends.js): add-by-search, pending requests,
@@ -919,6 +1014,23 @@
   </div>
 </div>
 
+<!-- Avatar picker (js/avatarpicker.js): pick an emoji + color tile. Opened from
+     the profile page's avatar. Palette comes from GET /api/avatar/options. -->
+<div id="avatarOverlay" class="overlay hidden">
+  <div class="panel" id="avatarPanel">
+    <h1>&#127917; CHOOSE AVATAR</h1>
+    <div class="sub">PICK AN EMOJI AND A BACKGROUND COLOR.</div>
+    <div id="avatarPreview" class="avatarEmoji"></div>
+    <div class="avatarPickLabel">EMOJI</div>
+    <div id="avatarEmojiGrid"></div>
+    <div class="avatarPickLabel">COLOR</div>
+    <div id="avatarColorRow" class="swatches"></div>
+    <div class="authErr" id="avatarErr"></div>
+    <button class="bigBtn" id="avatarSaveBtn">SAVE</button>
+    <button class="bigBtn ghostBtn" id="avatarCancelBtn">CANCEL</button>
+  </div>
+</div>
+
 <div id="lobbyOverlay" class="overlay hidden">
   <div class="panel" id="lobbyPanel">
     <h1>&#127921; PIXEL POOL</h1>
@@ -958,6 +1070,7 @@
   <div class="panel" id="endPanel">
     <div id="endTitle"></div>
     <div id="endReason"></div>
+    <div id="endRating" class="hidden"></div>
     <button class="bigBtn" id="rematchBtn">REMATCH</button>
     <button class="bigBtn" id="recapBtn">GAME RECAP</button>
     <button class="bigBtn dangerBtn" id="quitBtn">QUIT</button>
@@ -988,10 +1101,12 @@
 <script src="js/homechat.js"></script>
 <script src="js/auth.js"></script>
 <script src="js/notify.js"></script>
+<script src="js/avatarpicker.js"></script>
 <script src="js/profile.js"></script>
 <script src="js/stats.js"></script>
 <script src="js/playbyplay.js"></script>
 <script src="js/history.js"></script>
+<script src="js/careerstats.js"></script>
 <script src="js/game.js"></script>
 <script src="js/chat.js"></script>
 <script src="js/online.js"></script>

@@ -121,7 +121,8 @@
     return e;
   }
 
-  // One friend row: online dot + name, then MESSAGE / REMOVE actions.
+  // One friend row: online dot + name, then INVITE / VIEW PROFILE / MESSAGE /
+  // REMOVE actions. (INVITE is a placeholder — match invites aren't built yet.)
   function friendRow(f) {
     const row = el('div', 'friendRow');
     const left = el('div', 'friendWho');
@@ -130,13 +131,23 @@
     left.appendChild(el('span', 'friendStat', f.online ? 'ONLINE' : 'OFFLINE'));
     row.appendChild(left);
     const acts = el('div', 'friendActs');
+
+    const invite = el('button', 'friendMini soon', 'INVITE'); invite.type = 'button';
+    invite.addEventListener('click', () => {
+      if (addNote) addNote.textContent = 'Match invites are coming soon!';
+    });
+    const prof = el('button', 'friendMini', 'VIEW PROFILE'); prof.type = 'button';
+    prof.addEventListener('click', () => {
+      if (window.PixelPoolProfile) window.PixelPoolProfile.showUser(f.username);
+    });
     const msg = el('button', 'friendMini', 'MESSAGE'); msg.type = 'button';
     msg.addEventListener('click', () => {
       if (window.PixelPoolHomeChat) window.PixelPoolHomeChat.openWith(f.username);
     });
     const rm = el('button', 'friendMini danger', 'REMOVE'); rm.type = 'button';
     rm.addEventListener('click', () => act('/api/friends/remove', f.username));
-    acts.appendChild(msg); acts.appendChild(rm);
+
+    acts.appendChild(invite); acts.appendChild(prof); acts.appendChild(msg); acts.appendChild(rm);
     row.appendChild(acts);
     return row;
   }

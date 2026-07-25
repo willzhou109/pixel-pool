@@ -24,6 +24,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const auth = require('./auth');
 const history = require('./history');
+const stats = require('./stats');
+const avatar = require('./avatar');
+const profiles = require('./profiles');
 const friends = require('./friends');
 const chat = require('./chat');
 
@@ -104,7 +107,24 @@ async function handleApi(req, res, pathname, searchParams) {
 
   if (pathname === '/api/me' && req.method === 'GET') {
     const { status, body } = auth.me(bearer(req));
+    // Compose the avatar in here (rather than in auth.js) so avatar.js can keep
+    // requiring auth for its write endpoint without a circular dependency.
+    if (status === 200 && body.username) body.avatar = avatar.getAvatar(body.username);
     return sendJson(res, status, body);
+  }
+
+  // Avatars (server/avatar.js): the pickable emoji+color palette (no auth), and
+  // setting the signed-in player's avatar.
+  if (req.method === 'GET' && pathname === '/api/avatar/options') {
+    const { status, body } = avatar.options();
+    return sendJson(res, status, body);
+  }
+  if (req.method === 'POST' && pathname === '/api/avatar') {
+    let body;
+    try { body = await readJsonBody(req); }
+    catch { return sendJson(res, 400, { error: 'Bad request.' }); }
+    const { status, body: out } = avatar.set(bearer(req), body);
+    return sendJson(res, status, out);
   }
 
   // Match history (server/history.js): the signed-in player's game list, and
@@ -113,6 +133,24 @@ async function handleApi(req, res, pathname, searchParams) {
     const { status, body } = pathname === '/api/history'
       ? history.history(bearer(req))
       : history.matchDetail(bearer(req), Number(pathname.slice('/api/match/'.length)));
+    return sendJson(res, status, body);
+  }
+
+  // Career stats (server/stats.js): the signed-in player's lifetime tallies
+  // (shots, pots, fouls, streak) summed across all games, plus W/L/win-rate.
+  if (req.method === 'GET' && pathname === '/api/stats') {
+    const { status, body } = stats.career(bearer(req));
+    return sendJson(res, status, body);
+  }
+
+  // Public profiles (server/profiles.js): view ANOTHER player's header / stats /
+  // history. Any signed-in viewer may read these; the target need not be them.
+  const profileRoute = /^\/api\/users\/([A-Za-z0-9_]{3,20})\/(summary|stats|history)$/.exec(pathname);
+  if (req.method === 'GET' && profileRoute) {
+    const name = profileRoute[1], kind = profileRoute[2];
+    const handler = kind === 'summary' ? profiles.summary
+      : kind === 'stats' ? profiles.stats : profiles.history;
+    const { status, body } = handler(bearer(req), name);
     return sendJson(res, status, body);
   }
 
