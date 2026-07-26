@@ -6,11 +6,9 @@
  * the sidebar and chat bar (also direct children of #modeOverlay) never
  * unmount when navigating between home and profile; they persist across both.
  *
- * The username, join date, Elo rating + W/L record (all from /api/me), the
+ * The username, join date, Elo rating, friend count (all from /api/me), the
  * clickable avatar (js/avatarpicker.js) and the GAME HISTORY (js/history.js),
  * STATS (js/careerstats.js) and FRIEND LIST (js/friends.js) tabs are all real.
- * Remaining placeholders: the country flag is a blank box, and the friends count
- * in the meta row is hard-coded to 0.
  *
  * show(username, isGuest) renders your own profile; showUser(username) renders
  * ANOTHER player's — the same page and all three tabs, but their public data
@@ -126,7 +124,9 @@
     guest = !!isGuest;
     viewingSelf = self;
     currentUser = username;
-    nameEl.textContent = (isGuest ? 'GUEST' : (username || 'PLAYER')).toUpperCase();
+    // Show the username in its real case (GUEST/PLAYER are generic placeholders);
+    // the fetch below refines it to the server's canonical spelling.
+    nameEl.textContent = isGuest ? 'GUEST' : (username || 'PLAYER');
     if (tabBtns[2]) tabBtns[2].classList.remove('hidden'); // friend list works for anyone now
     // Only your own picture is editable (shows the pencil badge).
     if (avatarEl) avatarEl.classList.toggle('editable', self && !isGuest);
@@ -155,6 +155,7 @@
       // A newer navigation may have superseded this fetch — don't overwrite it.
       if (currentUser !== username) return;
       if (res.ok) {
+        if (data.username) nameEl.textContent = data.username; // canonical case
         joinedEl.textContent = formatJoined(data.createdAt);
         ratingEl.textContent = formatRating(data);
         if (friendsMetaEl) friendsMetaEl.textContent = formatFriends(data.friendCount || 0);
@@ -171,12 +172,10 @@
     }
   }
 
-  // "RATING: 1500" plus a W–L record once the player has games behind them.
+  // "RATING: 1500". The W–L record lives on the STATS tab, not in the header.
   function formatRating(data) {
     if (typeof data.rating !== 'number') return 'RATING: UNRATED';
-    let s = 'RATING: ' + data.rating;
-    if (data.games) s += '   ·   ' + (data.wins || 0) + 'W ' + (data.losses || 0) + 'L';
-    return s;
+    return 'RATING: ' + data.rating;
   }
 
   // The top PIXEL POOL logo always returns to the home screen (and clears the

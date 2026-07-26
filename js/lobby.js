@@ -1,13 +1,12 @@
 /* Lobby + matchmaking UI for Pixel Pool Online.
  *
- * Owns the lobby overlay's states (idle → searching → matched). The socket is
- * opened at login (auth.js) and lives for the whole session; activate() just
- * makes sure it's up when the lobby is entered, suspend() leaves the lobby
- * without dropping it (BACK to home), and deactivate() tears it down (logout).
- * All server talk goes through net.js.
- *
- * Actual online gameplay isn't built yet — a found match currently just shows
- * who you're playing and who breaks. The shot-sync layer plugs in here next.
+ * Owns the ONLINE panel's states (idle → searching → matched). That panel now
+ * lives inline on the home screen (#homeOnline), shown when the player toggles
+ * ONLINE — there's no separate lobby overlay anymore. The socket is opened at
+ * login (auth.js) and lives for the whole session; enter() makes sure it's up
+ * when ONLINE is selected, suspend() leaves matchmaking without dropping it
+ * (toggling back to OFFLINE / leaving home), and deactivate() tears it down
+ * (logout). All server talk goes through net.js.
  */
 (function () {
   'use strict';
@@ -57,7 +56,10 @@
   el.leaveBtn.addEventListener('click', () => { Net.leaveMatch(); showState('idle'); });
 
   /* ------------------------------ lifecycle ------------------------------ */
-  function activate(username, token) {
+  // ONLINE was just selected on the home screen: reset to idle and make sure
+  // the socket is up (it usually already is, from login — connect() reuses the
+  // live one and re-fires 'connected', which enables FIND MATCH).
+  function enter(token) {
     showState('idle');
     if (el.findBtn) el.findBtn.disabled = true;  // enabled once 'connected' arrives
     Net.connect(token);
@@ -68,20 +70,23 @@
     Net.disconnect();
     showState('idle');
   }
-  // BACK to the home screen: leave matchmaking but keep the socket — the
-  // player stays connected for their whole session; only logout disconnects.
+  // Toggling back to OFFLINE (or leaving the home screen): leave matchmaking but
+  // keep the socket — the player stays connected for their whole session; only
+  // logout disconnects.
   function suspend() {
     Net.cancelMatch();
     Net.leaveMatch();
     showState('idle');
   }
-  // Called by online.js when a match ends/drops: re-show the lobby (still
-  // connected) in its idle state, with an optional one-off note.
+  // Called by online.js when a match ends/drops: return to the home screen's
+  // ONLINE panel (still connected) in its idle state, with an optional one-off
+  // note in place of the status line.
   function backToIdle(note) {
     showState('idle');
-    document.getElementById('lobbyOverlay').classList.remove('hidden');
+    if (window.PixelPoolMode) window.PixelPoolMode.showHome('online');
     if (note && el.status) el.status.textContent = note;
+    else setStatus(Net.connected ? 'connected' : 'disconnected');
   }
 
-  window.PixelPoolLobby = { activate, deactivate, suspend, backToIdle };
+  window.PixelPoolLobby = { enter, deactivate, suspend, backToIdle };
 })();

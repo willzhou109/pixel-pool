@@ -53,7 +53,7 @@
   function fillRow(row, date, opponent, won) {
     row.innerHTML = '';
     row.appendChild(el('span', 'histDate', date));
-    row.appendChild(el('span', 'histVs', 'VS ' + String(opponent || '?').toUpperCase()));
+    row.appendChild(el('span', 'histVs', 'VS ' + String(opponent || '?')));
     row.appendChild(el('span', 'histRes ' + (won ? 'win' : 'loss'), won ? 'W' : 'L'));
   }
 

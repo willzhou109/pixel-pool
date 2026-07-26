@@ -1,8 +1,10 @@
-/* Online account flow for Pixel Pool — login / signup / lobby.
+/* Online account flow for Pixel Pool — login / signup.
  *
- * Owns the ONLINE overlays and talks to the backend (server/) over its JSON
- * API. game.js and mode.js don't know about accounts; mode.js just calls
- * window.PixelPoolAuth.openOnline() when the ONLINE button is pressed.
+ * Owns the LOG IN / SIGN UP overlays and talks to the backend (server/) over
+ * its JSON API. On success it opens the realtime socket and hands off to the
+ * home screen (mode.js), where the inline ONLINE panel (lobby.js) takes over
+ * matchmaking. game.js and mode.js don't know about accounts; they read the
+ * session token through window.PixelPoolAuth.getToken().
  *
  * The auth API is same-origin (fetch('/api/...')), so the game must be opened
  * through the server (http://localhost:3000), not from a file:// path. If the
@@ -16,14 +18,12 @@
     mode: $('modeOverlay'),
     login: $('loginOverlay'),
     signup: $('signupOverlay'),
-    lobby: $('lobbyOverlay'),
     loginForm: $('loginForm'), loginUser: $('loginUser'), loginPass: $('loginPass'),
     loginBtn: $('loginBtn'), loginErr: $('loginErr'),
     signupForm: $('signupForm'), signupUser: $('signupUser'), signupPass: $('signupPass'),
     signupBtn: $('signupBtn'), signupErr: $('signupErr'),
     toSignup: $('toSignup'), toLogin: $('toLogin'),
     loginBack: $('loginBack'), signupBack: $('signupBack'),
-    lobbyUser: $('lobbyUser'), lobbyBackBtn: $('lobbyBackBtn'),
   };
   if (!el.login || !el.signup) { console.warn('Auth: overlays missing'); return; }
 
@@ -33,7 +33,6 @@
   // silently overwrite the first tab's session (last writer wins).
   const TOKEN_KEY = 'pp_token', USER_KEY = 'pp_user';
   const getToken = () => { try { return sessionStorage.getItem(TOKEN_KEY); } catch { return null; } };
-  const getUser = () => { try { return sessionStorage.getItem(USER_KEY); } catch { return null; } };
   const setSession = (token, username) => {
     try { sessionStorage.setItem(TOKEN_KEY, token); sessionStorage.setItem(USER_KEY, username); } catch {}
   };
@@ -43,7 +42,7 @@
 
   /* ------------------------------ navigation ----------------------------- */
   const only = elm => {
-    [el.login, el.signup, el.lobby].forEach(o => o && o.classList.add('hidden'));
+    [el.login, el.signup].forEach(o => o && o.classList.add('hidden'));
     document.getElementById('landingOverlay').classList.add('hidden');
     document.getElementById('modeOverlay').classList.add('hidden');
     if (elm) elm.classList.remove('hidden');
@@ -58,27 +57,6 @@
   }
   function showHome(username) {
     if (window.PixelPoolMode) window.PixelPoolMode.enter(username, false);
-  }
-  function showLobby(username) {
-    el.lobbyUser.textContent = (username || 'PLAYER').toUpperCase();
-    only(el.lobby);
-    // Hand the lobby (matchmaking + socket lifecycle) off to lobby.js.
-    if (window.PixelPoolLobby) window.PixelPoolLobby.activate(username, getToken());
-  }
-
-  // Entry point used by mode.js's ONLINE button. We only get here once
-  // already logged in (guests are turned away before this is called), so a
-  // valid session should already exist; fall back to the login form if it
-  // somehow doesn't (e.g. the token expired since the home screen loaded).
-  async function openOnline() {
-    const token = getToken();
-    if (!token) return showLogin();
-    try {
-      const res = await fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) { const data = await res.json(); return showLobby(data.username); }
-    } catch { /* server unreachable — fall through to the login form */ }
-    clearSession();
-    showLogin();
   }
 
   function logout() {
@@ -142,13 +120,6 @@
   el.toLogin.addEventListener('click', showLogin);
   el.loginBack.addEventListener('click', showLanding);
   el.signupBack.addEventListener('click', showLanding);
-  // Lobby "BACK": leave matchmaking but keep the session AND the socket — the
-  // player stays logged in and connected on the home screen. (Logging out
-  // lives on the home screen's sidebar and is what disconnects.)
-  el.lobbyBackBtn.addEventListener('click', () => {
-    if (window.PixelPoolLobby) window.PixelPoolLobby.suspend();
-    showHome(getUser());
-  });
 
-  window.PixelPoolAuth = { openOnline, showLogin, logout };
+  window.PixelPoolAuth = { showLogin, logout, getToken };
 })();

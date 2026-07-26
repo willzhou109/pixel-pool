@@ -17,7 +17,7 @@
 
 const presence = require('./presence');
 const { areFriends, friendUsernames } = require('./friends');
-const { saveMessage, MAX_BODY } = require('./chat');
+const { saveMessage, markRead, MAX_BODY } = require('./chat');
 
 function onConnect(io, socket) {
   const me = socket.data.username;
@@ -43,6 +43,14 @@ function onConnect(io, socket) {
     const row = saveMessage(me, to, text);
     presence.emitToUser(to, 'dm', row);
     presence.emitToUser(me, 'dm', row); // echo to all my tabs, including this one
+  });
+
+  // The client marks a conversation read when it's opened/viewed. Opening it
+  // over REST already clears unread; this covers messages seen live while the
+  // conversation is on screen, so they don't resurface as unread on next login.
+  socket.on('mark-read', payload => {
+    const other = String((payload && payload.other) || '').trim();
+    if (other) markRead(me, other);
   });
 }
 

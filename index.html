@@ -95,6 +95,9 @@
     transition: opacity 0.25s;
   }
   .hudCard.active { opacity: 1; border-color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+  .hudCard .hudTop { display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .hudCard .hudAvatar { width: 18px; height: 18px; flex: none; display: none; }
+  .hudCard .hudAvatar.avatarEmoji { display: flex; font-size: 11px; }
   .hudCard .pname { font-size: 10px; }
   .hudCard .pgroup { font-size: 7px; color: var(--text-dim); margin-top: 6px; }
   .hudCard .dots { display: flex; gap: 3px; justify-content: center; margin-top: 7px; min-height: 8px; flex-wrap: wrap; }
@@ -425,7 +428,16 @@
   .playMode.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
 
   #modeNote { color: var(--text-dim); font-size: calc(8px * var(--home-scale)); line-height: 1.8; margin-top: 18px; min-height: 14px; }
-  #playBtn { align-self: center; font-size: calc(16px * var(--home-scale)); padding: 18px 52px; margin-top: 42px; }
+
+  /* Inline OFFLINE / ONLINE panels — swapped in place by the toggle above,
+     instead of navigating to a separate setup/lobby overlay. */
+  .homeModePanel { display: flex; flex-direction: column; align-items: center; margin-top: 22px; gap: 10px; }
+  #homeOffline #playersRow { width: 100%; }
+  #startBtn, #findMatchBtn { font-size: calc(16px * var(--home-scale)); padding: 18px 52px; margin-top: 20px; }
+  #homeOnline #lobbyStatus { font-size: calc(9px * var(--home-scale)); margin-top: 0; }
+  #homeOnline #lobbyIdle, #homeOnline #lobbySearching, #homeOnline #lobbyMatched {
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+  }
 
   /* Top-right user menu (replaces the old sidebar): an avatar + name button
      that drops down VIEW PROFILE / LOG OUT. Absolute in #modeOverlay so it
@@ -576,10 +588,6 @@
   #profileInfo { flex: 1; min-width: 0; }
   #profileNameRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   #profileName { font-size: calc(15px * var(--home-scale)); color: var(--accent); text-shadow: 2px 2px 0 #000; }
-  #profileFlag {
-    display: inline-block; width: 26px; height: 18px;
-    background: rgba(0, 0, 0, 0.4); border: 2px solid var(--panel-border);
-  }
   #profileRating { margin-top: 12px; font-size: calc(9px * var(--home-scale)); color: var(--text-dim); }
   #profileMeta {
     margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap;
@@ -750,9 +758,9 @@
 <canvas id="c"></canvas>
 
 <div id="hud" class="hidden">
-  <div class="hudCard" id="card0"><div class="pname"></div><div class="pgroup"></div><div class="dots"></div></div>
+  <div class="hudCard" id="card0"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pgroup"></div><div class="dots"></div></div>
   <div id="turnBadge"></div>
-  <div class="hudCard" id="card1"><div class="pname"></div><div class="pgroup"></div><div class="dots"></div></div>
+  <div class="hudCard" id="card1"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pgroup"></div><div class="dots"></div></div>
 </div>
 
 <div id="msg"></div>
@@ -845,7 +853,31 @@
       </div>
 
       <div id="modeNote"></div>
-      <button class="bigBtn" id="playBtn">PLAY</button>
+
+      <!-- OFFLINE: the local two-player setup, inline on the home screen
+           (was its own #setupOverlay). game.js fills #playersRow / owns #startBtn. -->
+      <div id="homeOffline" class="homeModePanel">
+        <div id="playersRow"></div>
+        <button class="bigBtn" id="startBtn">PLAY</button>
+      </div>
+
+      <!-- ONLINE: matchmaking, inline (was its own #lobbyOverlay). lobby.js drives
+           the idle -> searching -> matched states in place; the socket is opened at
+           login and lives for the whole session. -->
+      <div id="homeOnline" class="homeModePanel hidden">
+        <div class="authHint" id="lobbyStatus">&middot;&middot;&middot;</div>
+        <div id="lobbyIdle">
+          <button class="bigBtn" id="findMatchBtn">FIND MATCH</button>
+        </div>
+        <div id="lobbySearching" class="hidden">
+          <div class="authHint">Searching for an opponent&hellip;</div>
+          <button class="bigBtn ghostBtn" id="cancelMatchBtn">CANCEL</button>
+        </div>
+        <div id="lobbyMatched" class="hidden">
+          <div class="authHint" id="matchInfo"></div>
+          <button class="bigBtn ghostBtn" id="leaveMatchBtn">LEAVE MATCH</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -859,7 +891,6 @@
         <div id="profileInfo">
           <div id="profileNameRow">
             <span id="profileName">PLAYER</span>
-            <span id="profileFlag" title="Country (not set)"></span>
           </div>
           <div id="profileRating">RATING: UNRATED</div>
           <div id="profileMeta">
@@ -911,6 +942,10 @@
         <div id="friendSearchResults" class="friendResults hidden"></div>
         <div id="friendAddNote" class="friendNote"></div>
 
+        <div id="gameInviteSec" class="friendSection hidden">
+          <div class="friendSecTitle">GAME INVITES</div>
+          <div id="gameInviteList"></div>
+        </div>
         <div id="friendReqIn" class="friendSection hidden">
           <div class="friendSecTitle">FRIEND REQUESTS</div>
           <div id="friendReqInList"></div>
@@ -1034,41 +1069,6 @@
     <div class="authErr" id="avatarErr"></div>
     <button class="bigBtn" id="avatarSaveBtn">SAVE</button>
     <button class="bigBtn ghostBtn" id="avatarCancelBtn">CANCEL</button>
-  </div>
-</div>
-
-<div id="lobbyOverlay" class="overlay hidden">
-  <div class="panel" id="lobbyPanel">
-    <h1>&#127921; PIXEL POOL</h1>
-    <div class="sub">8-BALL ONLINE</div>
-    <div class="sub">WELCOME, <span id="lobbyUser">PLAYER</span>!</div>
-    <div class="authHint" id="lobbyStatus">&middot;&middot;&middot;</div>
-
-    <div id="lobbyIdle">
-      <button class="bigBtn" id="findMatchBtn">FIND MATCH</button>
-    </div>
-
-    <div id="lobbySearching" class="hidden">
-      <div class="authHint">Searching for an opponent&hellip;</div>
-      <button class="bigBtn ghostBtn" id="cancelMatchBtn">CANCEL</button>
-    </div>
-
-    <div id="lobbyMatched" class="hidden">
-      <div class="authHint" id="matchInfo"></div>
-      <button class="bigBtn ghostBtn" id="leaveMatchBtn">LEAVE MATCH</button>
-    </div>
-
-    <button class="bigBtn ghostBtn" id="lobbyBackBtn">BACK</button>
-  </div>
-</div>
-
-<div id="setupOverlay" class="overlay hidden">
-  <div class="panel">
-    <h1>&#127921; PIXEL POOL</h1>
-    <div class="sub">8-BALL OFFLINE</div>
-    <div id="playersRow"></div>
-    <button class="bigBtn" id="startBtn">PLAY</button>
-    <button class="bigBtn ghostBtn" id="setupBackBtn">BACK</button>
   </div>
 </div>
 

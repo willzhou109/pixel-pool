@@ -14,6 +14,7 @@
   if (!Net || !Game) { console.warn('Online: missing PixelPoolNet / PoolNetGame'); return; }
 
   let inMatch = false;
+  let matchToken = 0; // bumped on every match-found/end so a stale avatar fetch can detect it's superseded
 
   // The server confirms our identity (from the token it verified for THIS
   // socket) via 'welcome' right after connecting — use that as the source of
@@ -23,8 +24,26 @@
   Net.on('welcome', data => { myUsername = data && data.username; });
   const myName = () => myUsername || 'You';
 
+  // Same per-tab session key as js/auth.js.
+  const getToken = () => { try { return sessionStorage.getItem('pp_token'); } catch { return null; } };
+
+  // Look up a player's saved avatar for the in-game HUD. Falls back to null
+  // (no tile shown) for guests or on any fetch failure.
+  async function fetchAvatar(username) {
+    const token = getToken();
+    if (!token) return null;
+    try {
+      const res = await fetch('/api/users/' + encodeURIComponent(username) + '/summary', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const data = await res.json();
+      return (res.ok && data.avatar) ? data.avatar : null;
+    } catch { return null; }
+  }
+
   function toLobby(note) {
     inMatch = false;
+    matchToken++;
     if (Chat) Chat.hide();
     Game.endOnline();
     if (window.PixelPoolLobby) window.PixelPoolLobby.backToIdle(note);
@@ -36,11 +55,20 @@
 
   // A match was made: seat 0 is always the breaker, so both clients agree on
   // seats and on the shared rack seed. Launch the game.
-  Net.on('match-found', data => {
+  Net.on('match-found', async data => {
     inMatch = true;
+    const token = ++matchToken;
     const seat = data.youBreak ? 0 : 1;
     const names = seat === 0 ? [myName(), data.opponent] : [data.opponent, myName()];
-    Game.startOnline({ mySeat: seat, names, seed: data.seed });
+    const [myAvatar, oppAvatar] = await Promise.all([
+      window.PoolAvatar ? Promise.resolve(window.PoolAvatar.mine) : Promise.resolve(null),
+      fetchAvatar(data.opponent),
+    ]);
+    // A newer match (or a return to lobby) may have superseded this one while
+    // the avatar fetches were in flight — don't stomp its state.
+    if (token !== matchToken) return;
+    const avatars = seat === 0 ? [myAvatar, oppAvatar] : [oppAvatar, myAvatar];
+    Game.startOnline({ mySeat: seat, names, avatars, seed: data.seed });
     if (Chat) Chat.show(data.opponent);
   });
 

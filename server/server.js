@@ -175,6 +175,10 @@ async function handleApi(req, res, pathname, searchParams) {
     const { status, body } = friends.search(bearer(req), searchParams.get('q'));
     return sendJson(res, status, body);
   }
+  if (req.method === 'GET' && pathname === '/api/unread') {
+    const { status, body } = chat.unread(bearer(req));
+    return sendJson(res, status, body);
+  }
   if (req.method === 'GET' && /^\/api\/messages\/[A-Za-z0-9_]{3,20}$/.test(pathname)) {
     const other = decodeURIComponent(pathname.slice('/api/messages/'.length));
     const { status, body } = chat.conversation(bearer(req), other);
@@ -199,6 +203,12 @@ async function handleApi(req, res, pathname, searchParams) {
     const handler = pathname === '/api/signup' ? auth.signup : auth.login;
     try {
       const { status, body: out } = await handler(body);
+      // New account: give it a random look rather than everyone starting on
+      // the same default tile. Composed here (not in auth.js) for the same
+      // reason /api/me does — keeps auth.js from requiring avatar.js.
+      if (pathname === '/api/signup' && status === 201 && out.username) {
+        out.avatar = avatar.assignRandom(out.username);
+      }
       return sendJson(res, status, out);
     } catch (e) {
       console.error('[api] handler error:', e);

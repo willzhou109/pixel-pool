@@ -41,7 +41,28 @@
   const unread = new Map();          // usernameLower -> count
   const lower = s => String(s || '').toLowerCase();
 
-  if (Net) Net.on('welcome', d => { myName = d && d.username; });
+  // Learn our identity and seed unread badges from the server on (re)connect —
+  // this is what surfaces DMs received while we were offline, not just the ones
+  // that arrive live this session.
+  if (Net) Net.on('welcome', d => { myName = d && d.username; seedUnread(); });
+
+  // Pull the per-conversation unread counts and light the badges. Authoritative
+  // snapshot, so it replaces whatever we had (a fresh session starts empty).
+  async function seedUnread() {
+    const token = getToken();
+    if (!token) return;
+    let counts = {};
+    try {
+      const res = await fetch('/api/unread', { headers: { Authorization: `Bearer ${token}` } });
+      ({ counts = {} } = await res.json().catch(() => ({})));
+    } catch { return; /* offline — nothing to seed */ }
+    unread.clear();
+    Object.keys(counts).forEach(name => { if (counts[name] > 0) unread.set(lower(name), counts[name]); });
+    // Don't stomp a conversation the player is already reading.
+    if (active) unread.delete(lower(active));
+    updateMsgDot();
+    if (!active) renderList();
+  }
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -146,6 +167,7 @@
       if (ph) ph.remove();
       append(msg);
       if (!viewing(other)) bump(other); // arrived while collapsed/hidden
+      else if (!mine && Net) Net.markRead(other); // seen live → clear server-side unread too
     } else if (!mine) {
       bump(other);
     }
@@ -170,7 +192,12 @@
     collapsed = v;
     box.classList.toggle('collapsed', collapsed);
     if (toggle) toggle.innerHTML = collapsed ? '&#9650;' : '&#9660;';
-    if (!collapsed && active) { unread.delete(lower(active)); updateMsgDot(); }
+    // Uncollapsing back onto an open conversation counts as reading it.
+    if (!collapsed && active) {
+      unread.delete(lower(active));
+      if (Net) Net.markRead(active);
+      updateMsgDot();
+    }
   }
 
   if (toggle) toggle.addEventListener('click', () => setCollapsed(!collapsed));

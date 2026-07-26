@@ -28,6 +28,7 @@
     friends: [],   // [{ username, online }]
     incoming: [],  // [{ username }] — requests awaiting my response
     outgoing: [],  // [{ username }] — requests I've sent
+    invites: [],   // [{ username }] — game invites awaiting my response (ephemeral)
   };
   const subs = new Set();
   const notify = () => { updateNotifDot(); subs.forEach(fn => { try { fn(store); } catch (e) { console.error(e); } }); };
@@ -81,6 +82,40 @@
     Net.on('friend-request', refresh);
     Net.on('friend-accepted', refresh);
     Net.on('friend-removed', refresh);
+
+    // Game invites (ephemeral, held only in the store — never refetched).
+    Net.on('game-invite', d => addInvite(d && d.from));
+    Net.on('invite-cancelled', d => removeInvite(d && d.from));
+    Net.on('match-found', clearInvites); // entering a game consumes any invites
+    Net.on('invite-declined', d => inviteNote((d && d.by || 'They') + ' declined your invite.'));
+    Net.on('invite-sent', d => inviteNote('Invite sent to ' + (d && d.to) + '.'));
+    Net.on('invite-error', d => inviteNote((d && d.message) || 'Couldn’t send the invite.'));
+  }
+
+  /* ------------------------------ game invites ---------------------------- */
+  function addInvite(from) {
+    if (!from || store.invites.some(i => lower(i.username) === lower(from))) return;
+    store.invites.push({ username: from });
+    notify();
+    if (!otherTarget && !view.classList.contains('hidden')) render();
+  }
+  function removeInvite(from) {
+    const n = store.invites.length;
+    store.invites = store.invites.filter(i => lower(i.username) !== lower(from));
+    if (store.invites.length !== n) {
+      notify();
+      if (!otherTarget && !view.classList.contains('hidden')) render();
+    }
+  }
+  function clearInvites() {
+    if (!store.invites.length) return;
+    store.invites = [];
+    notify();
+    if (!otherTarget && !view.classList.contains('hidden')) render();
+  }
+  // Short feedback line, shown in the friends view's note area if it's open.
+  function inviteNote(msg) {
+    if (addNote && !otherTarget && !view.classList.contains('hidden')) addNote.textContent = msg;
   }
 
   function setOnline(name, on) {
@@ -92,15 +127,16 @@
   }
 
   /* ------------------------------- notif dot ------------------------------ */
-  // Two red dots track pending incoming requests: one on the user-menu button
-  // (#notifDot) and one on the FRIEND LIST tab (#friendReqDot).
+  // Two red dots flag things awaiting my response — pending friend requests OR
+  // game invites: one on the user-menu button (#notifDot), one on the FRIEND
+  // LIST tab (#friendReqDot).
   const notifDot = $('notifDot');
   const friendReqDot = $('friendReqDot');
   // The #profileFriends meta count is owned by js/profile.js now (it must reflect
   // whichever profile is open — yours or another player's — from that profile's
   // summary, not always your own count).
   function updateNotifDot() {
-    const has = store.incoming.length > 0;
+    const has = store.incoming.length > 0 || store.invites.length > 0;
     if (notifDot) notifDot.classList.toggle('show', has);
     if (friendReqDot) friendReqDot.classList.toggle('show', has);
   }
@@ -111,6 +147,7 @@
   const addInput = $('friendAddInput');
   const addNote = $('friendAddNote');
   const searchResults = $('friendSearchResults');
+  const inviteSec = $('gameInviteSec'), inviteList = $('gameInviteList');
   const reqInSec = $('friendReqIn'), reqInList = $('friendReqInList');
   const reqOutSec = $('friendReqOut'), reqOutList = $('friendReqOutList');
   const friendCount = $('friendCount');
@@ -126,7 +163,7 @@
   }
 
   // One friend row: online dot + name, then INVITE / VIEW PROFILE / MESSAGE /
-  // REMOVE actions. (INVITE is a placeholder — match invites aren't built yet.)
+  // REMOVE actions. INVITE asks them to play right now (online friends only).
   function friendRow(f) {
     const row = el('div', 'friendRow');
     const left = el('div', 'friendWho');
@@ -135,9 +172,10 @@
     row.appendChild(left);
     const acts = el('div', 'friendActs');
 
-    const invite = el('button', 'friendMini soon', 'INVITE'); invite.type = 'button';
+    const invite = el('button', 'friendMini' + (f.online ? '' : ' soon'), 'INVITE'); invite.type = 'button';
     invite.addEventListener('click', () => {
-      if (addNote) addNote.textContent = 'Match invites are coming soon!';
+      if (!f.online) { if (addNote) addNote.textContent = f.username + ' is offline — invites only work when they’re online.'; return; }
+      if (Net) Net.sendGameInvite(f.username); // feedback arrives via invite-sent / invite-error
     });
     const prof = el('button', 'friendMini', 'VIEW PROFILE'); prof.type = 'button';
     prof.addEventListener('click', () => {
@@ -175,8 +213,28 @@
     return row;
   }
 
+  // A game-invite row: name + ACCEPT (join the game now) / REJECT.
+  function inviteRow(name) {
+    const row = el('div', 'friendRow');
+    row.appendChild(el('span', 'friendName', name));
+    const acts = el('div', 'friendActs');
+    const ok = el('button', 'friendMini good', 'ACCEPT'); ok.type = 'button';
+    ok.addEventListener('click', () => { if (Net) Net.acceptGameInvite(name); });
+    const no = el('button', 'friendMini danger', 'REJECT'); no.type = 'button';
+    no.addEventListener('click', () => { removeInvite(name); if (Net) Net.rejectGameInvite(name); });
+    acts.appendChild(ok); acts.appendChild(no);
+    row.appendChild(acts);
+    return row;
+  }
+
   function render() {
     if (missing || otherTarget) return; // in "other" mode renderOther() draws the list
+    // Game invites (time-sensitive — shown first)
+    if (inviteList) {
+      inviteList.innerHTML = '';
+      store.invites.forEach(iv => inviteList.appendChild(inviteRow(iv.username)));
+      if (inviteSec) inviteSec.classList.toggle('hidden', store.invites.length === 0);
+    }
     // Incoming requests
     reqInList.innerHTML = '';
     store.incoming.forEach(r => reqInList.appendChild(reqRow(r.username, 'in')));
@@ -274,6 +332,7 @@
     if (!visible) {
       if (searchResults) { searchResults.innerHTML = ''; searchResults.classList.add('hidden'); }
       if (addNote) addNote.textContent = '';
+      if (inviteSec) inviteSec.classList.add('hidden'); // my invites, not theirs
       if (reqInSec) reqInSec.classList.add('hidden');
       if (reqOutSec) reqOutSec.classList.add('hidden');
     }

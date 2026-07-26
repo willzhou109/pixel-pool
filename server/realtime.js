@@ -16,8 +16,10 @@ const { Server } = require('socket.io');
 const { verifyToken } = require('./auth');
 const { recordMatch } = require('./history');
 const { applyResult } = require('./ratings');
+const { areFriends } = require('./friends');
 const presence = require('./presence');
 const social = require('./social');
+const invites = require('./invites');
 
 // Live match bookkeeping for history recording, keyed by room:
 // { names: [seat0Username, seat1Username], startMs, recorded }.
@@ -69,6 +71,54 @@ function initRealtime(httpServer) {
 
     socket.on('leave-match', () => leaveMatch(io, socket));
 
+    /* ----------------------------- game invites ---------------------------- */
+    // Invite a friend to play right now. Ephemeral (invites.js): pushed to the
+    // friend's sockets so it shows in their friend list until accepted/declined
+    // or a disconnect drops it.
+    socket.on('send-invite', payload => {
+      const to = String((payload && payload.to) || '').trim();
+      if (!to || to.toLowerCase() === username.toLowerCase()) return;
+      if (socket.data.room) return socket.emit('invite-error', { message: 'Finish your current game first.' });
+      if (!areFriends(username, to)) return socket.emit('invite-error', { message: 'You can only invite friends.' });
+      if (!presence.isOnline(to)) return socket.emit('invite-error', { message: `${to} is offline.` });
+      invites.create(username, to, socket.id);
+      presence.emitToUser(to, 'game-invite', { from: username });
+      socket.emit('invite-sent', { to });
+    });
+
+    // Decline an invite: drop it and let the inviter know.
+    socket.on('reject-invite', payload => {
+      const from = String((payload && payload.from) || '').trim();
+      if (from && invites.remove(from, username)) {
+        presence.emitToUser(from, 'invite-declined', { by: username });
+      }
+    });
+
+    // Accept an invite: pull both players into a match right now.
+    socket.on('accept-invite', payload => {
+      const from = String((payload && payload.from) || '').trim();
+      if (!from || socket.data.room) return;
+      const rec = invites.get(from, username);
+      if (!rec) { socket.emit('invite-cancelled', { from }); return socket.emit('invite-error', { message: 'That invite is no longer available.' }); }
+      // Prefer the exact socket the invite was sent from; fall back to any live,
+      // not-in-a-game socket of the inviter (they may have reconnected).
+      let inviter = io.sockets.sockets.get(rec.fromSocketId);
+      if (!inviter || inviter.data.room) {
+        inviter = presence.socketsFor(from).map(id => io.sockets.sockets.get(id)).find(s => s && !s.data.room) || null;
+      }
+      if (!inviter) {
+        invites.remove(from, username);
+        socket.emit('invite-cancelled', { from });
+        return socket.emit('invite-error', { message: `${from} is no longer available.` });
+      }
+      // Clear any other invites either player has in flight (they're busy now),
+      // then start the match. waitingId is cleared if either was mid-search.
+      cancelInvitesFor(username);
+      cancelInvitesFor(from);
+      if (waitingId === socket.id || waitingId === inviter.id) waitingId = null;
+      startMatch(io, inviter, socket);
+    });
+
     // Client-authoritative gameplay: relay any in-match message straight to the
     // opponent. The server never validates gameplay — the two clients agree on
     // game state between themselves (see js/online.js). The one message it
@@ -84,6 +134,7 @@ function initRealtime(httpServer) {
     socket.on('disconnect', () => {
       if (waitingId === socket.id) waitingId = null;
       leaveMatch(io, socket);
+      cancelInvitesFor(username); // drop this user's invites, tell the recipients
       social.onDisconnect(io, socket);
       console.log(`[rt] ${username} disconnected`);
     });
@@ -93,6 +144,14 @@ function initRealtime(httpServer) {
 }
 
 /* -------------------------------- helpers -------------------------------- */
+
+// Drop every game invite `user` is part of and tell each invite's recipient to
+// remove it from their friend list (their inviter went away or got busy).
+function cancelInvitesFor(user) {
+  for (const rec of invites.clearForUser(user)) {
+    presence.emitToUser(rec.to, 'invite-cancelled', { from: rec.from });
+  }
+}
 
 function startMatch(io, a, b) {
   const room = `m_${a.id}_${b.id}`;

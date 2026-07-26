@@ -152,7 +152,7 @@
       if (shot.shooter !== lastShooter) {
         lastShooter = shot.shooter;
         wrap.appendChild(el('div', 'pbpTurn',
-          (names[shot.shooter] || 'PLAYER ' + (shot.shooter + 1)).toUpperCase() + "'S TURN"));
+          (names[shot.shooter] || 'Player ' + (shot.shooter + 1)) + "'s turn"));
       }
       wrap.appendChild(el('div', 'pbpCaption', caption(shot, n)));
       const row = el('div', 'pbpBoards');

@@ -670,10 +670,16 @@ function physicsStep(h) {
   for (const b of balls) {
     if (b.potted) continue;
 
-    // pocket capture
+    // pocket capture. Side pockets (index 4-5) sit behind the long rail, past
+    // z = ±LIMZ — same threshold the cushion below bounces at — so their capture
+    // circle (drawn wide for a forgiving mouth) doesn't bulge onto the felt and
+    // snag a ball merely gliding along the rail. Corner pockets don't need this
+    // gate: their mouth sits in the existing CORNER_GAP cushion cut-back, which
+    // already keeps the felt clear right up to the corner.
     let captured = false;
     for (let pi = 0; pi < POCKETS.length; pi++) {
       const p = POCKETS[pi];
+      if (pi >= 4 && Math.abs(b.z) < LIMZ) continue;
       const dx = b.x - p.x, dz = b.z - p.z;
       if (dx * dx + dz * dz < p.r * p.r) { potBall(b, pi); captured = true; break; }
     }
@@ -1223,6 +1229,7 @@ function startMatch() {
   shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
   setCalledPocket(-1);
   pinnedMsg = null; // clear any prompt pinned from a previous game
+  showRating(null); // clear any Elo swing left from a previous online match
   state = S.AIM;
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS; // first-person: low, just behind the cue ball
   yawBeforeSurvey = null; // a fresh match starts clean, never mid-survey
@@ -1464,6 +1471,8 @@ function startOnline(opts) {
   rng = mulberry32(opts.seed >>> 0);
   players[0].cfg.name = opts.names[0];
   players[1].cfg.name = opts.names[1];
+  players[0].cfg.avatar = opts.avatars ? opts.avatars[0] : null;
+  players[1].cfg.avatar = opts.avatars ? opts.avatars[1] : null;
   players[0].group = players[1].group = null;
   turn = 0;                        // seat 0 = breaker
   if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
@@ -1478,7 +1487,7 @@ function startOnline(opts) {
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS;
   yawBeforeSurvey = null; // a fresh match starts clean, never mid-survey
 
-  ['landingOverlay', 'modeOverlay', 'loginOverlay', 'signupOverlay', 'lobbyOverlay', 'setupOverlay', 'endOverlay']
+  ['landingOverlay', 'modeOverlay', 'loginOverlay', 'signupOverlay', 'endOverlay']
     .forEach(id => { const e = document.getElementById(id); if (e) e.classList.add('hidden'); });
   document.getElementById('hud').classList.remove('hidden');
   document.getElementById('help').classList.remove('hidden');
@@ -1508,6 +1517,7 @@ function endOnline() {
     players[1].cfg.name = offlineNames[1];
     offlineNames = null;
   }
+  players[0].cfg.avatar = players[1].cfg.avatar = null;
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false;
   document.getElementById('endOverlay').classList.add('hidden');
@@ -1583,6 +1593,16 @@ function updateHUD() {
     const card = document.getElementById('card' + i);
     const p = players[i];
     card.querySelector('.pname').textContent = p.cfg.name;
+    const avEl = card.querySelector('.hudAvatar');
+    if (avEl) {
+      if (p.cfg.avatar && window.PoolAvatar) {
+        window.PoolAvatar.apply(avEl, p.cfg.avatar);
+      } else if (avEl.classList.contains('avatarEmoji')) {
+        avEl.classList.remove('avatarEmoji');
+        avEl.style.backgroundColor = '';
+        avEl.textContent = '';
+      }
+    }
     card.querySelector('.pgroup').textContent =
       p.group ? (p.group === 'solid' ? 'Solids' : 'Stripes') : 'No group yet';
     card.classList.toggle('active', i === turn && state !== S.END);
@@ -1658,7 +1678,9 @@ function selectTableStyle(i, announce) {
 
 document.getElementById('startBtn').addEventListener('click', () => {
   sfx.unlock();
-  document.getElementById('setupOverlay').classList.add('hidden');
+  // The OFFLINE setup is inline on the home screen now, so hide the whole
+  // home overlay (not a separate setup overlay) before the match begins.
+  document.getElementById('modeOverlay').classList.add('hidden');
   startMatch();
 });
 document.getElementById('rematchBtn').addEventListener('click', () => {
@@ -2004,7 +2026,6 @@ const q = new URLSearchParams(location.search);
 if (q.has('autostart')) {
   document.getElementById('landingOverlay').classList.add('hidden');
   document.getElementById('modeOverlay').classList.add('hidden');
-  document.getElementById('setupOverlay').classList.add('hidden');
   startMatch();
   if (q.has('autoshot')) {
     const dbg = document.createElement('div');

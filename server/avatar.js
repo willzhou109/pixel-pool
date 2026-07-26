@@ -60,6 +60,16 @@ function options() {
   return { status: 200, body: { emojis: EMOJIS, colors: COLORS, default: DEFAULT } };
 }
 
+/** Assign a random emoji+color from the allowlists to a brand-new account
+ *  (called from server.js right after signup, so every player starts with a
+ *  distinct look instead of everyone defaulting to the same DEFAULT tile). */
+function assignRandom(username) {
+  const emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+  upsertAvatar.run(username, emoji, color);
+  return { emoji, color };
+}
+
 /** Set the signed-in player's avatar. Rejects anything off the allowlists. */
 function set(token, body) {
   const username = verifyToken(token);
@@ -73,4 +83,4 @@ function set(token, body) {
   return { status: 200, body: { avatar: { emoji, color } } };
 }
 
-module.exports = { getAvatar, options, set, DEFAULT };
+module.exports = { getAvatar, options, set, assignRandom, DEFAULT };

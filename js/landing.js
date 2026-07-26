@@ -16,7 +16,7 @@
 
   function show() {
     [document.getElementById('modeOverlay'), document.getElementById('loginOverlay'),
-     document.getElementById('signupOverlay'), document.getElementById('lobbyOverlay')]
+     document.getElementById('signupOverlay')]
       .forEach(o => o && o.classList.add('hidden'));
     overlay.classList.remove('hidden');
   }

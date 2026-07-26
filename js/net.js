@@ -69,6 +69,13 @@
     socket.on('friend-accepted', data => fire('friend-accepted', data)); // they accepted my request
     socket.on('friend-removed', data => fire('friend-removed', data));   // declined / removed / cancelled
     socket.on('dm', msg => fire('dm', msg));                           // {id,from,to,text,at}
+
+    // Game invites (js/friends.js): a friend asking to play right now.
+    socket.on('game-invite', data => fire('game-invite', data));         // {from} — incoming
+    socket.on('invite-cancelled', data => fire('invite-cancelled', data)); // {from} — no longer available
+    socket.on('invite-declined', data => fire('invite-declined', data)); // {by} — they said no
+    socket.on('invite-sent', data => fire('invite-sent', data));         // {to} — server accepted my invite
+    socket.on('invite-error', data => fire('invite-error', data));       // {message}
   }
 
   function disconnect() {
@@ -87,6 +94,14 @@
   // Send a direct message to a friend (server persists + delivers it back).
   const sendDm = (to, text) => { if (socket) socket.emit('dm', { to, text }); };
 
+  // Tell the server we've read our conversation with `other` (clears its unread).
+  const markRead = other => { if (socket) socket.emit('mark-read', { other }); };
+
+  // Game invites: ask a friend to play, or accept/decline one they sent you.
+  const sendGameInvite = to => { if (socket) socket.emit('send-invite', { to }); };
+  const acceptGameInvite = from => { if (socket) socket.emit('accept-invite', { from }); };
+  const rejectGameInvite = from => { if (socket) socket.emit('reject-invite', { from }); };
+
   window.PixelPoolNet = {
     connect,
     disconnect,
@@ -95,6 +110,10 @@
     leaveMatch,
     sendGame,
     sendDm,
+    markRead,
+    sendGameInvite,
+    acceptGameInvite,
+    rejectGameInvite,
     on,
     get socket() { return socket; },
     get connected() { return !!(socket && socket.connected); },
