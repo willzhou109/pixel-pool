@@ -60,6 +60,23 @@
   const MAX_BANK_HARDNESS = 5.0;
   const MIN_BANK_CUT = 0.30;     // banks need a fuller hit than direct pots
 
+  // Position play (js/position.js). The bot rolls the cue ball out to where it
+  // would actually stop and asks what it would have NEXT, then adds that to the
+  // shot's own hardness at POS_WEIGHT. Kept well under 1 on purpose: potting is
+  // still the job, and a bot that passes up a hanger to play shape is worse than
+  // one that doesn't, not better. The costs below are in `hardness` units, whose
+  // useful range is ~0..4 (MAX_HARDNESS is 4.2).
+  const POS_WEIGHT = 0.45;
+  const PLAN_WIDTH = 6;          // easiest N pots get a roll-out; the rest can't win
+  const NO_SHOT = 6.0;           // left with nothing on
+  const SCRATCH_COST = 14.0;     // cue ball down: hands over ball-in-hand, avoid hard
+  const RAIL_COST = 0.8;         // finished tight on a cushion: awkward next bridge
+  const CLUTTER_COST = 1.2;      // finished in traffic, where the roll-out gave up
+  // Stroke speeds tried per shot, as multipliers of powerFor's baseline. The
+  // soft end is what buys position (a stunned cue ball stays put); every option
+  // is verified to still sink the ball before it's allowed to win.
+  const POWER_TRIES = [0.85, 1, 1.25, 1.6];
+
   const sub = (a, b) => ({ x: a.x - b.x, z: a.z - b.z });
   const len = v => Math.hypot(v.x, v.z);
   const norm = v => { const l = len(v) || 1; return { x: v.x / l, z: v.z / l }; };
@@ -94,14 +111,16 @@
     return balls.filter(b => b.id !== 8 && (solid ? b.id < 8 : b.id > 8));
   }
 
-  // Best straight-ish pot from a given cue position. Returns the top candidate
-  // { pocket(index), dir, yaw, hardness, dObj, dCue, cosCut } or null.
-  function bestPot(ctx, cuePos) {
+  /* Every legal (target, pocket) pot available from `cuePos`, scored on pure
+     shot-making geometry — no judgement about what the cue ball leaves behind.
+     `balls` and `targets` are explicit rather than read off ctx so the position
+     planner can re-run this on a HYPOTHETICAL table (the one that exists after
+     a pot drops) to see what the next shot would be. */
+  function potCandidates(ctx, cuePos, balls, targets) {
     const B = window.PoolBanks, t = tableOf(ctx);
-    const { balls, POCKETS, R, LIMX, LIMZ } = ctx;
-    const targets = legalTargets(ctx);
+    const { POCKETS, R, LIMX, LIMZ } = ctx;
     const clear = 2 * R * 0.98;
-    let best = null;
+    const out = [];
     for (const T of targets) {
       for (let pi = 0; pi < POCKETS.length; pi++) {
         const P = POCKETS[pi];
@@ -122,12 +141,93 @@
         if (pathBlocked(T, P, balls, [T.id], clear)) continue;          // object path
         const railHug = (Math.abs(T.z) > LIMZ - 3 * R || Math.abs(T.x) > LIMX - 3 * R) ? 0.3 : 0;
         const hardness = (1 - cosCut) * 2.4 + (dCue + dObj) * 0.55 + railHug;
-        if (!best || hardness < best.hardness) {
-          best = { pocket: pi, dir, yaw: yawFor(dir), hardness, dObj, dCue, cosCut, target: T.id };
-        }
+        out.push({
+          pocket: pi, dir, yaw: yawFor(dir), hardness, dObj, dCue, cosCut,
+          target: T.id, from: { x: T.x, z: T.z },
+        });
       }
     }
+    return out;
+  }
+
+  // Cheapest pot on the table, ignoring position — the lookahead's verdict on
+  // "what would I have next?". NO_SHOT when the layout leaves nothing on.
+  function easiestPot(ctx, cuePos, balls, targets) {
+    let h = NO_SHOT;
+    for (const c of potCandidates(ctx, cuePos, balls, targets)) {
+      if (c.hardness < h) h = c.hardness;
+    }
+    return h;
+  }
+
+  /* Which balls the bot would be shooting at NEXT if `potId` drops: its own
+     group minus that ball, or the 8 once the group is cleared. On an open
+     table the pot itself decides the group, so the ball's own suit is used. */
+  function nextTargets(ctx, restBalls, potId) {
+    const solid = ctx.group ? ctx.group === 'solid' : potId < 8;
+    const mine = restBalls.filter(b => b.id !== 8 && (solid ? b.id < 8 : b.id > 8));
+    return mine.length ? mine : restBalls.filter(b => b.id === 8);
+  }
+
+  /* How bad is the table this shot leaves? Lower is better, and it's measured
+     in the same units as `hardness` so the two can simply be added. */
+  function positionCost(ctx, rest, restBalls, nextT) {
+    if (rest.pocket >= 0) return SCRATCH_COST;           // cue ball went down
+    const Q = { x: rest.x, z: rest.z };
+    let cost = Math.min(easiestPot(ctx, Q, restBalls, nextT), NO_SHOT);
+    // Frozen on a cushion: awkward bridge, and the aim-assist can't help either.
+    if (Math.abs(Q.x) > ctx.LIMX - 2 * ctx.R || Math.abs(Q.z) > ctx.LIMZ - 2 * ctx.R) cost += RAIL_COST;
+    if (rest.cluttered) cost += CLUTTER_COST;            // finished in traffic
+    return cost;
+  }
+
+  /* Plan the stroke for one candidate pot: try a spread of speeds, keep only the
+     ones that still actually sink the ball (checked by rolling the object ball
+     out, which also rules out the coming-up-short that pure geometry can't see),
+     and pick whichever leaves the best next shot. Returns { cost, power }. */
+  function planShot(ctx, cuePos, shot) {
+    const P = window.PoolPos, t = tableOf(ctx);
+    const restBalls = ctx.balls.filter(b => b.id !== shot.target);
+    const nextT = nextTargets(ctx, restBalls, shot.target);
+    const base = powerFor(shot);
+    let best = null;
+    for (const mul of POWER_TRIES) {
+      const power = Math.max(0.24, Math.min(0.9, base * mul));
+      const cue = P.roll(t, cuePos, shot.dir, power * ctx.MAX_V, ctx.balls, shot.target);
+      if (!cue.transfer) continue;            // never even reached the object ball
+      const obj = P.roll(t, shot.from, cue.transfer.dir, cue.transfer.speed, restBalls, -1);
+      if (obj.pocket !== shot.pocket) continue; // too soft / wrong pocket at this speed
+      const cost = positionCost(ctx, cue, restBalls, nextT);
+      if (!best || cost < best.cost) best = { cost, power };
+    }
     return best;
+  }
+
+  /* Best pot from a given cue position — the easiest shot that also leaves the
+     cue ball somewhere useful. Shot-making still leads: `hardness` is weighted
+     full and the follow-on only at POS_WEIGHT, so position breaks ties between
+     comparable pots rather than talking the bot into a low-percentage one. Only
+     the PLAN_WIDTH easiest are planned, because rolling out the rest costs time
+     to rank shots that were never going to be chosen. */
+  function bestPot(ctx, cuePos) {
+    const cands = potCandidates(ctx, cuePos, ctx.balls, legalTargets(ctx));
+    if (!cands.length) return null;
+    cands.sort((a, b) => a.hardness - b.hardness);
+    // Nothing to play position FOR when the 8 ends the game — and without the
+    // roll-out module this degrades to the old "just take the easiest pot".
+    if (ctx.onEight || !window.PoolPos) return cands[0];
+
+    let best = null;
+    for (let i = 0; i < cands.length && i < PLAN_WIDTH; i++) {
+      const c = cands[i];
+      const plan = planShot(ctx, cuePos, c);
+      if (!plan) continue;                    // no speed makes this one drop
+      const score = c.hardness + POS_WEIGHT * plan.cost;
+      if (!best || score < best.score) best = Object.assign({}, c, { score, power: plan.power });
+    }
+    // Every candidate failed its roll-out (all too fine to survive the sim):
+    // fall back to the geometric pick rather than passing up the shot.
+    return best || cands[0];
   }
 
   // Stroke strength: reach the ghost (dCue) and drive the object to the pocket
@@ -141,12 +241,15 @@
     return Math.max(0.24, Math.min(viaRail ? 1 : 0.9, p));
   }
 
-  // The banks.js table descriptor, built from the snapshot game.js hands us.
+  // The table descriptor js/banks.js and js/position.js both take. The trailing
+  // physics constants are only used by position.js's roll-out.
   function tableOf(ctx) {
     return {
       R: ctx.R, PW: ctx.PW, PH: ctx.PH, LIMX: ctx.LIMX, LIMZ: ctx.LIMZ,
       CORNER_GAP: ctx.CORNER_GAP, SIDE_GAP: ctx.SIDE_GAP,
       POCKETS: ctx.POCKETS, REST: ctx.REST, GRIP: ctx.GRIP,
+      REST_BALL: ctx.REST_BALL, FRIC_C: ctx.FRIC_C, FRIC_L: ctx.FRIC_L,
+      STOP_V: ctx.STOP_V, PHYS_H: ctx.PHYS_H,
     };
   }
 
@@ -262,7 +365,9 @@
     if (shot && (shot.hardness < MAX_HARDNESS || ctx.onEight)) {
       return {
         yaw: shot.yaw, sigma: aimSigma(shot.cosCut, shot.dCue, shot.dObj),
-        power: powerFor(shot), pocket: shot.pocket, target: shot.target,
+        // the speed the position planner settled on, if it got to run
+        power: shot.power != null ? shot.power : powerFor(shot),
+        pocket: shot.pocket, target: shot.target,
       };
     }
 
@@ -283,14 +388,18 @@
     return safeShot(ctx, cuePos);
   }
 
-  // Ball-in-hand: place the cue for the easiest dead-straight pot (cue, ghost,
-  // object and pocket all colinear). Returns a shot with `place`, or null.
+  /* Ball-in-hand: place the cue for a dead-straight pot (cue, ghost, object and
+     pocket all colinear). Among those, prefer the one that also leaves the next
+     ball on — free placement is the best chance the bot ever gets to play shape,
+     and a straight pot stuns the cue to a near-standstill at the ghost, so which
+     ball and pocket it picks decides where it shoots from next. Returns a shot
+     with `place`, or null. */
   function placeShot(ctx) {
     const { balls, POCKETS, R, LIMX, LIMZ } = ctx;
     const targets = legalTargets(ctx);
     const STAND = 0.32; // cue standoff behind the ghost along the shot line
     const clear = 2 * R * 0.98;
-    let best = null;
+    const cands = [];
     for (const T of targets) {
       for (let pi = 0; pi < POCKETS.length; pi++) {
         const P = POCKETS[pi];
@@ -301,30 +410,46 @@
         if (balls.some(b => Math.hypot(b.x - cuePos.x, b.z - cuePos.z) < 2 * R * 1.05)) continue;
         if (pathBlocked(cuePos, ghost, balls, [T.id], clear)) continue;
         if (pathBlocked(T, P, balls, [T.id], clear)) continue;
-        const dObj = len(sub(P, T));
-        if (!best || dObj < best.dObj) {
-          best = { place: cuePos, pocket: pi, dObj, cosCut: 1, dCue: STAND + 2 * R, yaw: yawFor(toPocket), target: T.id };
-        }
+        cands.push({
+          place: cuePos, pocket: pi, dObj: len(sub(P, T)), cosCut: 1,
+          dCue: STAND + 2 * R, yaw: yawFor(toPocket), dir: toPocket,
+          target: T.id, from: { x: T.x, z: T.z },
+        });
       }
     }
-    if (!best) return null;
+    if (!cands.length) return null;
+    cands.sort((a, b) => a.dObj - b.dObj);
+
+    let best = cands[0];
+    if (!ctx.onEight && window.PoolPos) {
+      let bestScore = Infinity;
+      for (let i = 0; i < cands.length && i < PLAN_WIDTH; i++) {
+        const c = cands[i];
+        const plan = planShot(ctx, c.place, c);
+        if (!plan) continue;
+        // Distance still counts (a long straight pot is a worse bet than a short
+        // one), but position is what separates otherwise-equivalent placements.
+        const score = c.dObj * 0.55 + POS_WEIGHT * plan.cost;
+        if (score < bestScore) { bestScore = score; best = Object.assign({}, c, { power: plan.power }); }
+      }
+    }
     return {
       place: best.place, yaw: best.yaw, sigma: aimSigma(1, best.dCue, best.dObj),
-      power: powerFor(best), pocket: best.pocket, target: best.target,
+      power: best.power != null ? best.power : powerFor(best),
+      pocket: best.pocket, target: best.target,
     };
   }
 
   // Opening break: smash straight into the rack (aim at the nearest racked ball)
   // at full power. `safe` so game.js doesn't green-tune it (there's no pot to aim
   // for on a fresh rack) and doesn't nominate a called pocket.
-  function openingBreak(ctx) {
-    let near = null, nd = Infinity;
-    for (const b of ctx.balls) {
-      const d = len(sub(b, ctx.cue));
-      if (d < nd) { nd = d; near = b; }
-    }
-    const dir = near ? norm(sub(near, ctx.cue)) : { x: 1, z: 0 };
-    return { yaw: yawFor(dir), sigma: 0.012, power: 1, safe: true };
+  function openingBreak() {
+    // Break exactly straight at full power, along the table's centerline (z=0).
+    // Aim at a point far along the x-axis so any floating-point error in the
+    // yaw is negligible; the cue ball will travel perfectly parallel to the
+    // table's length.
+    const dir = norm({ x: 1, z: 0 });
+    return { yaw: yawFor(dir), sigma: 0, power: 1, safe: true };
   }
 
   /* The pocket to nominate for an 8-ball shot that isn't aimed at one — the bot

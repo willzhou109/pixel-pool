@@ -544,7 +544,7 @@
   if (prev) prev.addEventListener('click', () => apply(current - 1, true));
   if (next) next.addEventListener('click', () => apply(current + 1, true));
 
-  apply(0, false);   // establish the default environment on load
+  apply(2, false);   // establish the default environment on load (Outer Space)
 
   // Small surface for online sync (js/game.js): read/set the scene and be
   // notified of user-driven changes.

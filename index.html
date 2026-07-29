@@ -235,15 +235,17 @@
     font-family: var(--px); font-size: 8px; color: var(--accent);
     background: var(--panel); border: 3px solid var(--panel-border);
     padding: 9px 11px; cursor: pointer; letter-spacing: 1px;
+    width: 140px; text-align: center;
   }
   #settingsBtn:active { transform: translate(1px, 1px); }
   #settingsBtn.open { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(241,196,15,0.35); }
-  /* reset-zoom button — stacked just above the settings button */
+  /* reset-zoom button — stacked just above the settings button, same width */
   #resetZoomBtn {
     position: absolute; bottom: 50px; right: 12px; z-index: 12;
     font-family: var(--px); font-size: 8px; color: var(--accent);
     background: var(--panel); border: 3px solid var(--panel-border);
     padding: 9px 11px; cursor: pointer; letter-spacing: 1px;
+    width: 140px; text-align: center;
   }
   #resetZoomBtn:active { transform: translate(1px, 1px); }
   #settingsPanel {
@@ -746,10 +748,19 @@
 
   /* Online auth (login / signup / lobby) */
   #loginPanel, #signupPanel, #lobbyPanel { text-align: center; max-width: 420px; }
-  #landingPanel { text-align: center; }
+  #landingPanel { text-align: center; max-width: 420px; }
   /* Match LOG IN's size — .ghostBtn is normally a smaller de-emphasized
-     "back" action elsewhere, but here it's a co-equal second choice. */
-  #landingGuestBtn { font-size: 13px; }
+     "back" action elsewhere, but here it's a co-equal second choice. Both
+     buttons share one width so the stack reads as a single column. */
+  #landingPanel .bigBtn { width: 300px; max-width: 100%; font-size: 11px; }
+  /* Rotating billiards tip under the buttons. Sentence case on purpose — the
+     rest of the UI shouts in caps, this is meant to read like a hint. The
+     min-height holds three lines so a longer tip doesn't resize the panel. */
+  #landingTip {
+    margin-top: 22px; padding-top: 16px; border-top: 3px solid var(--panel-border);
+    font-size: 7px; line-height: 2; color: var(--text-dim); min-height: 42px;
+  }
+  #landingTip b { color: var(--accent); }
   .authForm { display: flex; flex-direction: column; text-align: left; margin-top: 6px; }
   .authForm label { font-size: 8px; color: var(--text-dim); margin: 14px 0 7px; }
   .authInput {
@@ -841,6 +852,7 @@
     <h1>&#127921; PIXEL POOL</h1>
     <button class="bigBtn" id="landingLoginBtn">LOG IN</button>
     <button class="bigBtn ghostBtn" id="landingGuestBtn">CONTINUE AS GUEST</button>
+    <div id="landingTip"></div>
   </div>
 </div>
 
@@ -868,8 +880,8 @@
            (was its own #setupOverlay). game.js fills #playersRow / owns #startBtn. -->
       <div id="homeOffline" class="homeModePanel">
         <div id="opponentTabs">
-          <button class="oppTab sel" id="vsPlayerBtn" type="button">2 PLAYERS</button>
-          <button class="oppTab" id="vsCpuBtn" type="button">VS COMPUTER</button>
+          <button class="oppTab sel" id="vsCpuBtn" type="button">VS COMPUTER</button>
+          <button class="oppTab" id="vsPlayerBtn" type="button">2 PLAYERS</button>
         </div>
         <div id="playersRow"></div>
         <button class="bigBtn" id="startBtn">PLAY</button>
@@ -1036,7 +1048,7 @@
 
 <div id="loginOverlay" class="overlay hidden">
   <div class="panel" id="loginPanel">
-    <h1>&#127921; PIXEL POOL ONLINE</h1>
+    <h1>&#127921; PIXEL POOL</h1>
     <div class="sub">LOG IN TO YOUR ACCOUNT.</div>
     <form id="loginForm" class="authForm" autocomplete="on">
       <label for="loginUser">USERNAME</label>
@@ -1053,8 +1065,8 @@
 
 <div id="signupOverlay" class="overlay hidden">
   <div class="panel" id="signupPanel">
-    <h1>&#127921; PIXEL POOL ONLINE</h1>
-    <div class="sub">SIGN UP FOR PIXEL POOL ONLINE!</div>
+    <h1>&#127921; PIXEL POOL</h1>
+    <div class="sub">SIGN UP FOR PIXEL POOL!</div>
     <form id="signupForm" class="authForm" autocomplete="on">
       <label for="signupUser">USERNAME</label>
       <input id="signupUser" class="authInput" type="text" name="username" autocomplete="username" maxlength="20" spellcheck="false" autocapitalize="off">
@@ -1128,6 +1140,7 @@
 <script src="js/history.js"></script>
 <script src="js/careerstats.js"></script>
 <script src="js/banks.js"></script>
+<script src="js/position.js"></script>
 <script src="js/bottalk.js"></script>
 <script src="js/bot.js"></script>
 <script src="js/chat.js"></script>

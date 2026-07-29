@@ -1086,7 +1086,7 @@ const BOT_SKILL = 0.001;
 let botAim = null;            // {yaw, pull} driving the ghost cue on the bot's turn
 let botStriking = false;      // bot's ghost-cue strike animation in progress
 let botTimer = null;          // pending "thinking" delay before the bot acts
-let vsCPU = false;            // setup toggle: next offline match is vs the computer
+let vsCPU = true;             // setup toggle: next offline match is vs the computer
 let forceBotBreak = false;    // test override (?botbreak): make the computer break
 let bothBotSeats = false;     // test override (?botvbot): the computer plays BOTH seats,
                               // for headless self-play stats — see isBotSeat().
@@ -1318,6 +1318,10 @@ function botContext(phase) {
     R, PW, PH, LIMX, LIMZ, POCKETS,
     // Cushion gaps + restitution, so js/banks.js can work out one-rail paths.
     CORNER_GAP, SIDE_GAP, REST: REST_CUSH, GRIP: CUSH_GRIP,
+    // The rest of the physics, so js/position.js can replay physicsStep for one
+    // ball and tell the bot where the cue will finish. Passed rather than copied
+    // so there stays exactly one source of truth for these.
+    REST_BALL, FRIC_C, FRIC_L, STOP_V, MAX_V, PHYS_H,
     cue: { x: cue.x, z: cue.z },
     balls: balls.filter(b => b.id !== 0 && !b.potted).map(b => ({ id: b.id, x: b.x, z: b.z })),
     group: players[turn].group,
@@ -1608,6 +1612,7 @@ function resolveShot() {
 function resetSceneAfterGame() {
   rackBalls();
   hidePlaceGhost();
+  setCalledPocket(-1); // hide the 8-ball call ring
   document.getElementById('help').classList.add('hidden');
   exitSurveyCam(); // don't leave the bird's-eye view stuck if the match ended mid-decision (forfeit)
 }

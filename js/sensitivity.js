@@ -2,8 +2,8 @@
  *
  * Owns a single multiplier applied to every keyboard-driven action in
  * keyboard.js — camera orbit (arrows / WASD), zoom (Q / E) and the SPACE power
- * build. 1.0 (100%) is the tuned default; lower feels slower/finer, higher
- * feels faster/twitchier.
+ * build. 100% is today's original tuned rate and also the ceiling — anything
+ * faster is overkill. Defaults to 25%; lower feels slower/finer, down to 1%.
  *
  * Built into the in-game switcher (#sensSwitch), offering a slider plus a
  * number box for entering an exact percentage. The chosen value persists
@@ -12,14 +12,23 @@
 (function () {
   'use strict';
 
-  const MIN = 0.1, MAX = 3.0, DEFAULT = 1.0;   // 10%..300%
+  const MIN = 0.01, MAX = 1.0, DEFAULT = 0.25;   // 1%..100% — 100% is today's tuned rate
   const STORE_KEY = 'pixelpool.kbdSensitivity';
+  // One-time forced reset to the new default, even for players with an old
+  // saved value — bump this key whenever DEFAULT changes and should override
+  // everyone's existing setting. After this runs once, a player's own choice
+  // (via apply()) persists normally again.
+  const RESET_KEY = 'pixelpool.kbdSensitivity.resetV2';
 
   const clamp = v => Math.max(MIN, Math.min(MAX, v));
   const pct = v => Math.round(v * 100);
 
   let value = DEFAULT;
   try {
+    if (!localStorage.getItem(RESET_KEY)) {
+      localStorage.removeItem(STORE_KEY);
+      localStorage.setItem(RESET_KEY, '1');
+    }
     const saved = parseFloat(localStorage.getItem(STORE_KEY));
     if (isFinite(saved)) value = clamp(saved);
   } catch (e) { /* storage unavailable — fall back to default */ }
