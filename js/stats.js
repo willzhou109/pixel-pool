@@ -57,8 +57,9 @@
   function beginShot(before, dir) { pendingShot = { before, dir }; }
 
   // One resolved stroke. pots = own-group balls sunk this stroke (game.js
-  // excludes the cue and the 8, and counts every object ball while the table
-  // is still open). foul: null | 'scratch' | 'noContact' | 'wrongBall'.
+  // excludes the cue, counts every object ball while the table is still open,
+  // and adds the 8 on the stroke that legally wins).
+  // foul: null | 'scratch' | 'noContact' | 'wrongBall'.
   // after = the settled post-shot layout (see beginShot for the shape).
   function recordShot(shooter, pots, foul, after) {
     const s = seats[shooter];
@@ -114,7 +115,10 @@
   }
 
   const fouls = s => s.scratches + s.noContact + s.wrongBall;
-  const rate = (n, d) => d ? Math.round(100 * n / d) + '%' : '—';
+  // Clamped at 100%: these are "shots that did X out of shots taken", so the
+  // ratio is <= 1 by construction — but the same renderer also shows stored
+  // career/history records, and a malformed one must never read as 130%.
+  const rate = (n, d) => d ? Math.min(100, Math.round(100 * n / d)) + '%' : '—';
 
   // [label, value-for-seat, isSubRow] — sub-rows are the per-type foul
   // breakdown indented under the FOULS total.

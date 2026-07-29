@@ -433,6 +433,16 @@
      instead of navigating to a separate setup/lobby overlay. */
   .homeModePanel { display: flex; flex-direction: column; align-items: center; margin-top: 22px; gap: 10px; }
   #homeOffline #playersRow { width: 100%; }
+  /* OFFLINE sub-toggle: 2 players (hot-seat) vs the computer opponent. */
+  #opponentTabs { display: flex; gap: 12px; align-self: center; }
+  .oppTab {
+    font-family: var(--px); font-size: calc(9px * var(--home-scale)); padding: 10px 16px;
+    background: rgba(0, 0, 0, 0.45); border: 3px solid var(--panel-border);
+    color: var(--text-dim); cursor: pointer;
+  }
+  .oppTab:active { transform: translate(1px, 1px); }
+  .oppTab.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+  .cpuBadge { font-size: 9px; color: var(--accent); margin-top: 14px; line-height: 1.9; }
   #startBtn, #findMatchBtn { font-size: calc(16px * var(--home-scale)); padding: 18px 52px; margin-top: 20px; }
   #homeOnline #lobbyStatus { font-size: calc(9px * var(--home-scale)); margin-top: 0; }
   #homeOnline #lobbyIdle, #homeOnline #lobbySearching, #homeOnline #lobbyMatched {
@@ -857,6 +867,10 @@
       <!-- OFFLINE: the local two-player setup, inline on the home screen
            (was its own #setupOverlay). game.js fills #playersRow / owns #startBtn. -->
       <div id="homeOffline" class="homeModePanel">
+        <div id="opponentTabs">
+          <button class="oppTab sel" id="vsPlayerBtn" type="button">2 PLAYERS</button>
+          <button class="oppTab" id="vsCpuBtn" type="button">VS COMPUTER</button>
+        </div>
         <div id="playersRow"></div>
         <button class="bigBtn" id="startBtn">PLAY</button>
       </div>
@@ -1113,8 +1127,11 @@
 <script src="js/playbyplay.js"></script>
 <script src="js/history.js"></script>
 <script src="js/careerstats.js"></script>
-<script src="js/game.js"></script>
+<script src="js/banks.js"></script>
+<script src="js/bottalk.js"></script>
+<script src="js/bot.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/game.js"></script>
 <script src="js/online.js"></script>
 <script src="js/backgrounds.js"></script>
 <script src="js/aimassist.js"></script>

@@ -14,7 +14,9 @@
 
 const hooks = window.PoolAimHooks;
 if (!hooks) { console.warn('AimAssist: PoolAimHooks missing'); return; }
-const { POCKETS, R, balls } = hooks;
+const { POCKETS, R, LIMZ, SIDE_GAP, balls } = hooks;
+// Table descriptor for js/banks.js's reachable() — the side-pocket aperture test.
+const TABLE = { POCKETS, R, LIMZ, SIDE_GAP };
 
 const settings = { lines: true, pockets: true }; // default: both aids on
 
@@ -45,11 +47,12 @@ function pathBlocked(obj, dx, dz, dist) {
   return false;
 }
 
-/* Given the aim's ghost-contact point (gx,gz) and the ball it strikes, light up
-   the pocket the object ball is lined up to fall into (if any). */
-function updateAim(hit, gx, gz) {
-  if (!settings.pockets || !hit || !hit.ball) { hideGlow(); return; }
-
+/* Which pocket the struck object ball is lined up to drop into for a given aim
+   (its ghost-contact point gx,gz and the ball hit), or -1 if none. Pure — no
+   glow, independent of the `pockets` setting — so the computer opponent (js/bot.js)
+   can aim with the very same predictor the human sees glow green. */
+function predictPocket(hit, gx, gz) {
+  if (!hit || !hit.ball) return -1;
   const b = hit.ball;
   // Object ball leaves along the line from the contact point through its center.
   let dx = b.x - gx, dz = b.z - gz;
@@ -64,10 +67,23 @@ function updateAim(hit, gx, gz) {
     if (proj <= 0) continue;                       // pocket is behind the ball
     const perp = Math.sqrt(Math.max(0, mx * mx + mz * mz - proj * proj));
     if (perp > p.r * 0.82) continue;               // would rattle / miss
+    // Side pockets are reached through a slot in the cushion, so pointing at the
+    // cup isn't enough — the ball has to cross the rail plane inside the slot
+    // (js/banks.js reachable()). Without this a shallow line lights a side
+    // pocket green on a shot the jaw would actually turn away.
+    const PB = window.PoolBanks;
+    if (PB && !PB.reachable(TABLE, b, { x: dx, z: dz }, i)) continue;
     if (pathBlocked(b, dx, dz, proj)) continue;    // another ball is in the way
     if (perp < bestPerp) { bestPerp = perp; best = i; }
   }
-  lightPocket(best);
+  return best;
+}
+
+/* Given the aim's ghost-contact point (gx,gz) and the ball it strikes, light up
+   the pocket the object ball is lined up to fall into (if any). */
+function updateAim(hit, gx, gz) {
+  if (!settings.pockets) { hideGlow(); return; }
+  lightPocket(predictPocket(hit, gx, gz));
 }
 
 /* --------------------------------- UI ----------------------------------- */
@@ -110,6 +126,7 @@ window.AimAssist = {
   showLines() { return settings.lines; },
   showPockets() { return settings.pockets; },
   updateAim,
+  predictPocket, // used by the bot to aim with the same green-pocket signal
   clear: hideGlow,
 };
 

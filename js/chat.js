@@ -25,8 +25,12 @@
   let oppName = 'Opponent';
   let empty = true;
 
-  function clearLog() {
-    logEl.innerHTML = '<div class="cempty">Say hi to your opponent&hellip;</div>';
+  function clearLog(placeholder) {
+    logEl.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'cempty';
+    d.textContent = placeholder || 'Say hi to your opponent…';
+    logEl.appendChild(d);
     empty = true;
   }
 
@@ -62,15 +66,20 @@
   });
 
   window.PixelPoolChat = {
-    show(name) {
+    // opts.readOnly hides the composer — used by vs-Computer, where the box is a
+    // running commentary from the bot and there's no one to send a reply to.
+    show(name, opts) {
+      const o = opts || {};
       oppName = name || 'Opponent';
       oppEl.textContent = 'vs ' + oppName;
-      clearLog();
+      clearLog(o.placeholder);
+      formEl.classList.toggle('hidden', !!o.readOnly);
       root.classList.remove('hidden', 'collapsed');
       toggle.innerHTML = '&#9660;';
     },
     hide() {
       root.classList.add('hidden');
+      formEl.classList.remove('hidden'); // restore the composer for online play
       inputEl.value = '';
       inputEl.blur();
     },

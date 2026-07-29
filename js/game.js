@@ -64,7 +64,7 @@ const START_PITCH = 0.34, START_RADIUS = 0.95; // the low first-person shot view
 // and the short axis (Z, PH=0.635) into the depth — see updateCamera()'s
 // spherical layout, where screen-right tracks cos(yaw) and screen-up tracks
 // -sin(pitch) at high pitch, so yaw=0 keeps X purely horizontal.
-const SURVEY_YAW = 0, SURVEY_PITCH = 1.35, SURVEY_RADIUS = 3.1;
+const SURVEY_YAW = 0, SURVEY_PITCH = 1.56, SURVEY_RADIUS = 1.9;
 let yawBeforeSurvey = null; // stashed cam.yaw while surveying; null = not surveying
 const cam = {
   yaw: Math.PI * 0.5, pitch: 0.72, radius: 3.4,
@@ -73,7 +73,7 @@ const cam = {
 };
 
 function updateCamera() {
-  cam.pitch = Math.max(0.10, Math.min(1.40, cam.pitch));
+  cam.pitch = Math.max(0.10, Math.min(1.56, cam.pitch));
   cam.radius = Math.max(0.30, Math.min(5.5, cam.radius));
   cam.target.lerp(cam.goal, 0.10);
   const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
@@ -539,7 +539,9 @@ const cue = balls[0];
 /* Data + controls the aim-assist module (js/aimassist.js) needs. Kept as a
    small explicit surface so that feature can live in its own file. */
 window.PoolAimHooks = {
-  scene, POCKETS, R, BALL_Y, TABLE_Y, balls,
+  // LIMZ + SIDE_GAP: the long-rail plane and its side-pocket slot, so the assist
+  // can test whether a ball can actually thread into a side pocket.
+  scene, POCKETS, R, LIMZ, SIDE_GAP, BALL_Y, TABLE_Y, balls,
   // Turn a pocket's black void green (and glowing) or back to normal. Reads the
   // live pocketMats so it keeps working after a table-style rebuild.
   setPocketGlow(i, on) {
@@ -769,6 +771,28 @@ function physicsStep(h) {
 
 const sfx = (function () {
   let ctx = null, noise = null, lastT = {};
+  const rnd = (lo, hi) => lo + Math.random() * (hi - lo);
+  const samples = {}; // name -> decoded AudioBuffer, filled in once ctx exists
+  function loadSample(name) {
+    fetch(`sounds/${name}.mp3`)
+      .then(r => r.arrayBuffer())
+      .then(buf => ctx.decodeAudioData(buf))
+      .then(ab => { samples[name] = ab; })
+      .catch(() => {}); // missing/blocked file: caller falls back to synthesis
+  }
+  function playSample(name, vol, rate) {
+    const ab = samples[name];
+    if (!ab) return false;
+    const now = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = ab;
+    src.playbackRate.value = rate || 1;
+    const g = ctx.createGain();
+    g.gain.value = Math.min(1, vol);
+    src.connect(g).connect(ctx.destination);
+    src.start(now);
+    return true;
+  }
   function ensure() {
     if (ctx) return true;
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -778,29 +802,86 @@ const sfx = (function () {
     noise = ctx.createBuffer(1, len, ctx.sampleRate);
     const ch = noise.getChannelData(0);
     for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+    loadSample('clack');
+    loadSample('strike');
     return true;
   }
-  function burst(vol, freq, q, dur, key) {
-    if (!ctx || ctx.state !== 'running') return;
-    const now = ctx.currentTime;
-    if (key && lastT[key] && now - lastT[key] < 0.03) return;
-    if (key) lastT[key] = now;
+  // A short slice of the noise buffer through a filter, its own gain envelope.
+  function noiseBurst(dest, vol, freq, q, dur, type, delay) {
+    const now = ctx.currentTime + (delay || 0);
     const src = ctx.createBufferSource();
     src.buffer = noise;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = q;
+    const f = ctx.createBiquadFilter();
+    f.type = type || 'bandpass'; f.frequency.value = freq; f.Q.value = q;
     const g = ctx.createGain();
-    g.gain.setValueAtTime(Math.min(1, vol), now);
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(Math.min(1, vol), now + 0.001);
     g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    src.connect(bp).connect(g).connect(ctx.destination);
+    src.connect(f).connect(g).connect(dest);
     src.start(now); src.stop(now + dur);
+  }
+  // A pure tone "ring" — ivory/phenolic balls have a resonant pitch under the click.
+  function ping(dest, vol, freq, dur, delay) {
+    const now = ctx.currentTime + (delay || 0);
+    const o = ctx.createOscillator();
+    o.type = 'sine'; o.frequency.setValueAtTime(freq, now);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.9, now + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    o.connect(g).connect(dest);
+    o.start(now); o.stop(now + dur);
+  }
+  function throttled(key) {
+    if (!ctx || ctx.state !== 'running') return false;
+    const now = ctx.currentTime;
+    if (key && lastT[key] && now - lastT[key] < 0.03) return false;
+    if (key) lastT[key] = now;
+    return true;
   }
   return {
     unlock() { if (ensure() && ctx.state === 'suspended') ctx.resume(); },
-    clack(imp) { burst(0.15 + imp * 0.22, 2600, 1.5, 0.07, 'c'); },
-    cushion(imp) { burst(0.08 + imp * 0.12, 420, 1.2, 0.10, 'w'); },
-    pocket() { burst(0.5, 190, 1.0, 0.28, 'p'); burst(0.25, 900, 2, 0.1); },
-    strike(pow) { burst(0.2 + pow * 0.5, 1600, 1.2, 0.08); },
+    // Ball-on-ball: a hard, very short transient click plus a brief resonant
+    // ring whose pitch and length track impact speed (harder hits ring higher
+    // and slightly longer, the way phenolic balls do), with per-hit jitter so
+    // repeated shots don't sound identical.
+    clack(imp) {
+      if (!throttled('c')) return;
+      const n = Math.max(0, Math.min(1, imp / MAX_V));   // 0 = bare tap, 1 = hardest hit
+      const vol = (0.14 + n * 0.86) * 0.8;
+      const rate = rnd(0.94, 1.06) + n * 0.08;           // harder hits ring a touch brighter
+      if (playSample('clack', vol, rate)) return;
+      // fallback while sounds/clack.mp3 hasn't loaded (or failed to)
+      noiseBurst(ctx.destination, 0.05 + n * 0.4, rnd(2800, 3600), rnd(4, 7), rnd(0.012, 0.02), 'bandpass');
+      ping(ctx.destination, (0.05 + n * 0.4) * 0.35, rnd(1800, 2200) + n * 500, rnd(0.03, 0.05) + n * 0.02);
+    },
+    // Cushion: cushions are rubber under cloth, so the strike is duller and
+    // longer than a ball click — lowpassed, lower-pitched, slower decay, with
+    // a soft sub-thump from the rail flexing.
+    cushion(imp) {
+      if (!throttled('w')) return;
+      const vol = 0.09 + imp * 0.16;
+      noiseBurst(ctx.destination, vol, rnd(280, 380), rnd(0.8, 1.3), rnd(0.06, 0.09), 'lowpass');
+      noiseBurst(ctx.destination, vol * 0.4, 90, 0.9, 0.1, 'lowpass');
+    },
+    pocket() {
+      if (!throttled('p')) return;
+      noiseBurst(ctx.destination, 0.5, 190, 1.0, 0.28);
+      noiseBurst(ctx.destination, 0.25, 900, 2, 0.1);
+    },
+    // Cue strike: tip-on-ball compression — brighter and shorter than a
+    // ball-ball clack (leather tip, not phenolic), plus a felt low-end thump
+    // that scales with how hard the shot is hit.
+    strike(pow) {
+      if (!throttled('s')) return;
+      const n = Math.max(0, Math.min(1, pow));           // 0 = softest tap, 1 = full power
+      const vol = (0.14 + n * 0.86) * 0.8;
+      const rate = rnd(0.94, 1.06) + n * 0.06;           // harder strikes a touch brighter
+      if (playSample('strike', vol, rate)) return;
+      // fallback while sounds/strike.mp3 hasn't loaded (or failed to)
+      noiseBurst(ctx.destination, 0.05 + n * 0.45, rnd(2000, 2400), 2.5, rnd(0.02, 0.03));
+      noiseBurst(ctx.destination, 0.02 + n * 0.25, 140, 1.0, 0.05, 'lowpass');
+    },
   };
 })();
 
@@ -900,7 +981,9 @@ function updateAimVisuals() {
   // "Lines" assist toggles the guide/object/ghost visuals; the cue stick and
   // pocket-preview are independent of it.
   const linesOn = aiming && (!AA || AA.showLines());
-  stick.visible = aiming || striking;
+  // The real stick shows only for the local player's own stroke; the bot's
+  // stroke uses the ghost stick (botStrike), so gate `striking` on myTurn().
+  stick.visible = aiming || (striking && myTurn());
   if (!aiming) { // while striking, fire()'s animation drives the stick
     guideLine.visible = objLine.visible = ghostRing.visible = false;
     if (AA) AA.clear();
@@ -986,17 +1069,49 @@ let watcherStriking = false;  // ghost-cue strike animation in progress (mirrors
 let applyingRemoteSetup = false; // guard: suppress re-broadcast while applying a synced scene
 let bgSyncHooked = false;     // whether the background change hook is registered yet
 
-// True when I control the cue right now (offline, or my turn online).
-function myTurn() { return !onlineMode || turn === mySeat; }
-// True when I'm watching the opponent shoot (online, their turn).
-function watching() { return onlineMode && turn !== mySeat; }
-function netSend(msg) { if (onlineMode && netSink) netSink(msg); }
+/* ------------------------- vs computer (offline) ----------------------- */
+// A local match against the built-in AI (js/bot.js). Reuses the online ghost-cue
+// POV: on the human's turn they aim normally; on the computer's turn the human
+// watches a floating ghost cue line up and strike, but — unlike online — all the
+// physics runs locally. mySeat stays the human (0); botSeat is the computer (1).
+let botMode = false;
+let botSeat = 1;
+// How long the computer's stated plan sits on screen before it draws the cue
+// back — long enough to read the line and find the ball/pocket it named.
+const BOT_READ_MS = 2600;
+// Aim wobble as a fraction of a pot's make-window half-width (see runBotTurn).
+// ~0.3 ⇒ most easy pots drop, thin cuts miss often — the "easy shots + legal
+// play" bar, without the bot being an aimbot.
+const BOT_SKILL = 0.001;
+let botAim = null;            // {yaw, pull} driving the ghost cue on the bot's turn
+let botStriking = false;      // bot's ghost-cue strike animation in progress
+let botTimer = null;          // pending "thinking" delay before the bot acts
+let vsCPU = false;            // setup toggle: next offline match is vs the computer
+let forceBotBreak = false;    // test override (?botbreak): make the computer break
+let bothBotSeats = false;     // test override (?botvbot): the computer plays BOTH seats,
+                              // for headless self-play stats — see isBotSeat().
 
-// ---- online-aware messaging (say "You" from each client's perspective) ----
-// Online: true if `seat` is the local player. Offline (hotseat) is never "you".
-function isMe(seat) { return onlineMode && seat === mySeat; }
+// True when I control the cue right now (offline hot-seat, or my seat's turn).
+function myTurn() { return (onlineMode || botMode) ? turn === mySeat : true; }
+// True when I'm watching the online opponent shoot (their turn). Network only —
+// the bot runs physics locally, so it must NOT gate physics/resolve like this.
+function watching() { return onlineMode && turn !== mySeat; }
+// Is `seat` computer-controlled? Normally just botSeat; ?botvbot makes both.
+function isBotSeat(seat) { return botMode && (seat === botSeat || bothBotSeats); }
+// True while the computer is taking its turn (bot mode). Drives the ghost cue +
+// input lock, but not the physics (which runs locally).
+function botTurn() { return isBotSeat(turn) && state !== S.END; }
+// The human is a spectator right now: online watcher, or watching the bot shoot.
+function spectating() { return watching() || botTurn(); }
+function netSend(msg) { if (onlineMode && netSink) netSink(msg); }
+function clearBotTimer() { if (botTimer) { clearTimeout(botTimer); botTimer = null; } }
+
+// ---- perspective-aware messaging (say "You" from the local player's view) ----
+// Online or vs-CPU: true if `seat` is the local human. Offline hot-seat (two
+// humans sharing the screen) has no single "you", so nobody is.
+function isMe(seat) { return (onlineMode || botMode) && seat === mySeat; }
 function endTitleFor(winner) {
-  if (!onlineMode) return `🏆 ${players[winner].cfg.name} wins!`;
+  if (!onlineMode && !botMode) return `🏆 ${players[winner].cfg.name} wins!`;
   return winner === mySeat ? '🏆 YOU WON!' : '😞 YOU LOST';
 }
 
@@ -1028,6 +1143,7 @@ function setCalledPocket(i) {
 // Open the shooter's turn: nominate a pocket first if they're on the 8-ball,
 // otherwise go straight to aiming. Resets any previous pocket call.
 function enterAim() {
+  hidePlaceGhost(); // never carry a ball-in-hand preview into a shot
   setCalledPocket(-1);
   if (myTurn() && isOnEight(turn)) {
     state = S.CALLING;
@@ -1039,6 +1155,18 @@ function enterAim() {
 }
 
 /* ------------------------------- shooting ------------------------------ */
+
+// Launch the cue ball once a stroke's thrust completes. Shared by the human's
+// fire() (real stick) and the computer's botStrike() (ghost stick), so the
+// stroke-end behaviour (reset shot events, apply velocity, sfx) stays identical.
+function launchCue(dx, dz, power) {
+  striking = false;
+  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+  const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
+  cue.vx = dx * speed;
+  cue.vz = dz * speed;
+  sfx.strike(power);
+}
 
 function fire(power) {
   const d = aimDir();
@@ -1058,19 +1186,290 @@ function fire(power) {
   (function anim() {
     const t = (performance.now() - start) / dur;
     if (t >= 1) {
-      striking = false;
       stick.visible = false;
-      shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
-      const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
-      cue.vx = d.x * speed;
-      cue.vz = d.y * speed;
-      sfx.strike(power);
+      launchCue(d.x, d.y, power);
       return;
     }
     stick.position.set(cue.x, BALL_Y, cue.z)
       .addScaledVector(back, 0.035 + pull0 * (1 - t));
     requestAnimationFrame(anim);
   })();
+}
+
+/* ---------------------------- vs computer AI --------------------------- */
+
+// Fine-tune a nominal aim by searching for the band of headings that actually
+// produce the intended outcome, and shooting at its centre. `works(yaw)` is the
+// oracle — for a direct pot it's the aim-assist's own green-pocket predictor
+// (the same signal the human sees glow); banks and kicks pass their own (see
+// botAimTest). Returns { yaw, width }: the heading, and the band width (rad).
+//
+// The band for a real pot is TINY — predictPocket accepts a line only within
+// ~0.82 pocket-radii of the cup, which for a mid-range ball is on the order of
+// 0.1°. A fixed-step sweep coarse enough to cover the search fan steps straight
+// over that window and finds nothing, so we do it in two passes:
+//   1. coarse scan to find any sample that works (brackets the window),
+//   2. bisection outward from that seed to the window's true edges.
+// Aiming at the centre of the resolved band leaves the maximum margin for the
+// skill wobble the caller adds on top.
+function tuneAim(nominalYaw, works) {
+  const greens = works;
+
+  // 1. Coarse scan for a seed inside the window. Steps must be fine enough not
+  // to skip a narrow band: 0.02° over a ±3.4° fan.
+  const FAN = 0.06, STEP = 0.00035;
+  let seed = null;
+  if (greens(nominalYaw)) seed = 0; // the geometric aim usually lands in it
+  else {
+    for (let off = STEP; off <= FAN && seed === null; off += STEP) {
+      if (greens(nominalYaw + off)) seed = off;
+      else if (greens(nominalYaw - off)) seed = -off;
+    }
+  }
+  if (seed === null) return { yaw: nominalYaw, width: 0 }; // no pot line at all
+
+  // 2. Walk each way from the seed until the band stops, then bisect the last
+  // step to land on the true edge.
+  const edge = dir => {
+    let inside = seed, outside = seed + dir * STEP, steps = 0;
+    while (greens(nominalYaw + outside) && steps++ < 400) {
+      inside = outside; outside += dir * STEP;
+    }
+    for (let i = 0; i < 12; i++) {
+      const mid = (inside + outside) / 2;
+      if (greens(nominalYaw + mid)) inside = mid; else outside = mid;
+    }
+    return inside;
+  };
+  const lo = edge(-1), hi = edge(1);
+  return { yaw: nominalYaw + (lo + hi) / 2, width: Math.abs(hi - lo) };
+}
+
+// The banks.js table descriptor for this table's geometry + cushion physics.
+function bankTable() {
+  return {
+    R, PW, PH, LIMX, LIMZ, CORNER_GAP, SIDE_GAP, POCKETS,
+    REST: REST_CUSH, GRIP: CUSH_GRIP,
+  };
+}
+const liveBalls = () => balls.filter(b => b.id !== 0 && !b.potted);
+
+/* The oracle tuneAim searches with, chosen by how the shot gets there:
+     direct — the aim-assist's green-pocket predictor,
+     bank   — the object still has to reach that pocket, but off one cushion,
+     kick   — no pot at all: the cue just has to contact the intended ball
+              first after one cushion (a legal hit instead of a foul).
+   Returns null when there's nothing meaningful to tune against. */
+function botAimTest(decision) {
+  const AA = window.AimAssist, B = window.PoolBanks;
+  const aimAt = yaw => {
+    const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+    return { dx, dz, hit: castAim(cue.x, cue.z, dx, dz) };
+  };
+
+  if (decision.via === 'kick') {
+    if (!B || decision.target == null) return null;
+    return yaw => {
+      const { dx, dz } = aimAt(yaw);
+      const b = B.ballAfterKick(bankTable(), { x: cue.x, z: cue.z }, { x: dx, z: dz }, liveBalls());
+      return !!b && b.id === decision.target;
+    };
+  }
+
+  if (decision.pocket == null) return null;
+
+  if (decision.via === 'bank') {
+    if (!B) return null;
+    return yaw => {
+      const { dx, dz, hit } = aimAt(yaw);
+      if (!hit.ball || hit.ball.id !== decision.target) return false;
+      // The object leaves along contact-point -> its centre, same as the direct
+      // predictor, then has to survive one cushion to reach the pocket.
+      const gx = cue.x + dx * hit.t, gz = cue.z + dz * hit.t;
+      let ox = hit.ball.x - gx, oz = hit.ball.z - gz;
+      const ol = Math.hypot(ox, oz) || 1;
+      const from = { x: hit.ball.x, z: hit.ball.z };
+      const p = B.pocketAfterBank(bankTable(), from, { x: ox / ol, z: oz / ol },
+        liveBalls(), hit.ball.id);
+      return p === decision.pocket;
+    };
+  }
+
+  if (!AA || !AA.predictPocket) return null;
+  return yaw => {
+    const { dx, dz, hit } = aimAt(yaw);
+    if (!hit.ball) return false;
+    return AA.predictPocket(hit, cue.x + dx * hit.t, cue.z + dz * hit.t) === decision.pocket;
+  };
+}
+
+// Kick off the computer's turn after a short "thinking" pause. Called after
+// every resolved shot in bot mode when the table has passed to the computer.
+function scheduleBotTurn() {
+  clearBotTimer();
+  // Long enough to read the computer's reaction to the previous shot before it
+  // starts talking about the next one.
+  botTimer = setTimeout(runBotTurn, 1100);
+}
+
+// Build the plain snapshot js/bot.js reasons over (no Three.js objects).
+function botContext(phase) {
+  return {
+    R, PW, PH, LIMX, LIMZ, POCKETS,
+    // Cushion gaps + restitution, so js/banks.js can work out one-rail paths.
+    CORNER_GAP, SIDE_GAP, REST: REST_CUSH, GRIP: CUSH_GRIP,
+    cue: { x: cue.x, z: cue.z },
+    balls: balls.filter(b => b.id !== 0 && !b.potted).map(b => ({ id: b.id, x: b.x, z: b.z })),
+    group: players[turn].group,
+    onEight: isOnEight(turn),
+    phase,
+    breakShot,
+  };
+}
+
+// The computer decides and plays its shot: place the cue if it has ball-in-hand,
+// nominate a pocket if it's on the 8, then line up the ghost cue and strike.
+function runBotTurn() {
+  botTimer = null;
+  if (!isBotSeat(turn) || state === S.END) return;
+
+  const placing = state === S.PLACING;
+  let decision;
+  try { decision = window.PoolBot && window.PoolBot.chooseShot(botContext(placing ? 'place' : 'aim')); }
+  catch (e) { console.error('Bot decision failed:', e); }
+  if (!decision) decision = { yaw: cam.yaw, sigma: 0, power: 0.4 }; // defensive fallback
+
+  if (placing) {
+    if (decision.place) {
+      cue.x = decision.place.x; cue.z = decision.place.z;
+      cue.vx = cue.vz = 0; cue.potted = false; cue.sink = 0;
+      setBallVisual(cue);
+    }
+    hidePlaceGhost();
+    unpinToast();
+  }
+  state = S.AIM;
+  exitSurveyCam();
+
+  // Fine-tune the nominal aim against whichever oracle fits this shot (green
+  // pocket / bank / kick), then apply the skill wobble on top.
+  let aimYaw = decision.yaw;
+  let sigma = decision.sigma || 0;
+  const works = decision.safe ? null : botAimTest(decision);
+  if (works) {
+    const { yaw, width } = tuneAim(decision.yaw, works);
+    aimYaw = yaw;
+    // Scale the wobble to the pot's make-window. Unclamped, the skill noise
+    // (~0.2-0.6°) dwarfs a typical window and every shot is a coin flip
+    // regardless of difficulty. Tying sigma to the half-window keeps the miss
+    // rate roughly constant in "fraction of the window" terms, so difficulty
+    // comes from the geometry: a wide-window pot is reliable, a thin one is
+    // genuinely missable. BOT_SKILL is the fraction of the half-window that is
+    // 1σ — smaller means a stronger bot. This REPLACES the geometric sigma
+    // rather than capping it: the window already encodes the shot's difficulty,
+    // so keeping the larger raw value on wide-window pots would just reintroduce
+    // misses on the easy shots the bot is meant to make.
+    if (width > 0) sigma = (width / 2) * BOT_SKILL;
+  }
+  aimYaw = gaussianYaw(aimYaw, sigma);
+
+  // On the 8-ball the computer nominates a pocket (the same gold call marker the
+  // human uses) so resolveShot judges it as a called shot. It must call even when
+  // snookered — the shot itself may be a kick or safety with no pot in mind, and
+  // bot.js supplies `callPocket` for exactly that case. Without it a fluked 8
+  // would count as an uncalled "clean finish" win the human could never get.
+  let forcedCall = null;   // a call made without a pot in mind (snookered on the 8)
+  if (isOnEight(turn)) {
+    const aimed = decision.pocket != null && decision.pocket >= 0;
+    const call = aimed ? decision.pocket : decision.callPocket;
+    if (call != null && call >= 0) {
+      setCalledPocket(call);
+      if (!aimed) forcedCall = call;
+    }
+  }
+
+  // Announce the plan, then hold before drawing the cue back so there's time to
+  // read it and look at the table the computer is describing.
+  botSay(window.PoolBotTalk && window.PoolBotTalk.intent(decision, {
+    breakShot, onEight: isOnEight(turn), ballInHand: placing, forcedCall,
+  }));
+  clearBotTimer();
+  botTimer = setTimeout(() => {
+    botTimer = null;
+    if (!isBotSeat(turn) || state === S.END) return;
+    botAimTo(aimYaw, () => botStrike(decision.power, aimYaw));
+  }, BOT_READ_MS);
+}
+
+// Put a line from the computer in the in-match chat box (js/chat.js), which
+// vs-CPU opens read-only as a commentary feed.
+function botSay(text) {
+  if (!botMode || !text || !window.PixelPoolChat) return;
+  window.PixelPoolChat.receive(text);
+}
+
+// Add ~N(0, sigma) aim noise (sum of three uniforms ≈ normal) — the bot's skill.
+function gaussianYaw(yaw, sigma) {
+  if (!sigma) return yaw;
+  const n = (Math.random() + Math.random() + Math.random() - 1.5) / 0.5;
+  return yaw + n * sigma;
+}
+
+// Smoothly swing the ghost cue from wherever it was to the chosen heading, then
+// run `done` (the strike). Renders via updateGhostCue reading botAim.
+function botAimTo(targetYaw, done) {
+  const startYaw = botAim ? botAim.yaw : targetYaw - 0.55;
+  botAim = { yaw: startYaw, pull: 0 };
+  const start = performance.now(), dur = 750;
+  (function anim() {
+    if (!isBotSeat(turn) || state === S.END) { botAim = null; return; }
+    const t = Math.min(1, (performance.now() - start) / dur);
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+    botAim.yaw = lerpAngle(startYaw, targetYaw, e);
+    if (t >= 1) { done(); return; }
+    requestAnimationFrame(anim);
+  })();
+}
+
+// The computer's stroke: draw the ghost cue back, thrust, then launch the cue
+// ball and hand off to the shared local physics (no network in bot mode).
+function botStrike(power, yaw) {
+  if (!isBotSeat(turn) || state === S.END) return;
+  const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
+  if (window.MatchStats) window.MatchStats.beginShot(statsLayout(), { x: round4(d.x), z: round4(d.y) });
+  botAim = { yaw, pull: 0 };
+  botStriking = true; // owns the ghost stick; keep state S.AIM so the cam stays low
+  striking = true;    // gate resolveShot until the ball is actually launched
+  const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
+  const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
+  const pull0 = 0.05 + power * MAX_PULL;
+  const drawMs = 300, hitMs = 70, start = performance.now();
+  (function anim() {
+    if (state === S.END) { botStriking = false; ghostStick.visible = false; return; }
+    const el = performance.now() - start;
+    let pull;
+    if (el < drawMs) pull = pull0 * (el / drawMs);              // draw back
+    else if (el < drawMs + hitMs) pull = pull0 * (1 - (el - drawMs) / hitMs); // thrust
+    else {                                                       // contact
+      botStriking = false;
+      ghostStick.visible = false;
+      state = S.ROLLING;
+      launchCue(d.x, d.y, power);
+      return;
+    }
+    ghostStick.position.copy(base).addScaledVector(back, 0.035 + pull);
+    ghostStick.lookAt(base.clone().addScaledVector(back, 5));
+    ghostStick.visible = true;
+    requestAnimationFrame(anim);
+  })();
+}
+
+// Shortest-arc interpolation between two angles (radians).
+function lerpAngle(a, b, t) {
+  let d = (b - a) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
 }
 
 /* ---------------------------- shot resolution --------------------------- */
@@ -1107,12 +1506,32 @@ function resolveShot() {
         : first !== 8);
   const foul = scratch || !legalContact;
 
+  // Did this stroke sink the 8 LEGALLY — i.e. is it the shot that wins? Mirrors
+  // the win conditions below exactly: no scratch, and either it found the pocket
+  // the shooter nominated, or (uncalled) their group was cleared. Sinking the 8
+  // early, or in the wrong pocket, loses the game and is no one's "pot".
+  const clearedOwn = !!me.group && remaining(me.group) === 0;
+  const legal8 = potted8 && !scratch && (calledPocket >= 0
+    ? shotEvents.eightPocket === calledPocket
+    : clearedOwn);
+
   // Stats: log the stroke. "Balls pocketed" counts the shooter's own group
-  // only (every object ball but the 8 while the table is still open).
-  if (window.MatchStats) window.MatchStats.recordShot(turn,
-    me.group ? ownPotted : potted.filter(id => id !== 8).length,
+  // (every object ball but the 8 while the table is still open), plus the 8
+  // itself on the winning stroke — clearing the table is 8 balls, not 7.
+  const credited = (me.group ? ownPotted : potted.filter(id => id !== 8).length) + (legal8 ? 1 : 0);
+  if (window.MatchStats) window.MatchStats.recordShot(turn, credited,
     scratch ? 'scratch' : first === null ? 'noContact' : !legalContact ? 'wrongBall' : null,
     statsLayout());
+
+  // The computer's take on how that went. Runs before the game-ending returns
+  // below, so it still gets the last word on the shot that decides the match.
+  if (isBotSeat(turn) && window.PoolBotTalk) {
+    botSay(window.PoolBotTalk.reaction({
+      potted: credited, foul, scratch, legal8,
+      won: legal8,
+      lost: potted8 && !legal8,   // sank the 8 early / in the wrong pocket
+    }));
+  }
 
   // A called 8-ball shot (the shooter was on the 8 and nominated a pocket).
   if (calledPocket >= 0) {
@@ -1130,8 +1549,8 @@ function resolveShot() {
     // passes the turn — both handled below.
   } else if (potted8) {
     // 8 dropped while balls of the group remained, or on the very shot the group
-    // cleared. Same-shot clear counts as a clean finish; otherwise it's a loss.
-    const clearedOwn = me.group && remaining(me.group) === 0;
+    // cleared (`clearedOwn`, hoisted above for the stats credit). Same-shot clear
+    // counts as a clean finish; otherwise it's a loss.
     if (clearedOwn && !scratch) {
       return endGame(turn, `${me.cfg.name} sank the 8-ball. Clean finish!`);
     }
@@ -1188,12 +1607,14 @@ function resolveShot() {
 // left on the felt. Table style and background are left as the players chose.
 function resetSceneAfterGame() {
   rackBalls();
+  hidePlaceGhost();
   document.getElementById('help').classList.add('hidden');
   exitSurveyCam(); // don't leave the bird's-eye view stuck if the match ended mid-decision (forfeit)
 }
 
 function endGame(winner, reason) {
   state = S.END;
+  clearBotTimer(); // stop any pending computer turn
   lastEnd = { winner, reason };
   if (window.MatchStats) window.MatchStats.finalize(winner, reason);
   document.getElementById('endTitle').textContent = endTitleFor(winner);
@@ -1210,7 +1631,8 @@ function endGame(winner, reason) {
 // same end screen (see applyState's 'end' phase).
 function forfeit() {
   if (state === S.SETUP || state === S.END) return;
-  const loser = onlineMode ? mySeat : turn;
+  // Online or vs-CPU, the local human concedes; hot-seat, whoever holds the table.
+  const loser = (onlineMode || botMode) ? mySeat : turn;
   for (const b of balls) { b.vx = 0; b.vz = 0; } // halt any mid-shot motion
   unpinToast(); // release any "place the cue ball" / "call a pocket" prompt
   endGame(1 - loser, `${players[loser].cfg.name} forfeited the match.`);
@@ -1220,15 +1642,24 @@ window.PoolMatch = { forfeit };
 
 function startMatch() {
   onlineMode = false;          // local match: full control, random rack
+  botMode = vsCPU;             // vs the computer? (set by the OFFLINE setup toggle)
+  mySeat = 0; botSeat = 1;     // the human is seat 0
+  clearBotTimer(); botAim = null; botStriking = false;
   rng = Math.random;
   players[0].group = null;
   players[1].group = null;
-  turn = 0;
+  if (botMode) players[1].cfg.name = 'Computer';
+  // Vs-CPU: a 50/50 coin flip decides who breaks each game. Hot-seat and online
+  // keep player 1 / the breaker seat as before.
+  if (!botMode) turn = 0;
+  else if (forceBotBreak) turn = botSeat;                 // test override
+  else turn = Math.random() < 0.5 ? mySeat : botSeat;
   if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
   rackBalls();
   shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
   setCalledPocket(-1);
   pinnedMsg = null; // clear any prompt pinned from a previous game
+  hidePlaceGhost(); // and any ball-in-hand preview from the last one
   showRating(null); // clear any Elo swing left from a previous online match
   state = S.AIM;
   cam.yaw = -Math.PI / 2; cam.pitch = START_PITCH; cam.radius = START_RADIUS; // first-person: low, just behind the cue ball
@@ -1237,8 +1668,19 @@ function startMatch() {
   document.getElementById('help').classList.remove('hidden');
   if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
-  toast(`${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
+  toast(isMe(turn) ? `You break. Drag back from the cue ball to shoot.`
+    : botMode ? `${players[turn].cfg.name} breaks…`
+      : `${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
   updateHUD();
+  // Vs-CPU borrows the online match chat as a one-way commentary feed: the
+  // computer narrates each shot (js/bottalk.js), so the composer stays hidden.
+  if (window.PixelPoolChat) {
+    if (botMode) window.PixelPoolChat.show('Computer', {
+      readOnly: true, placeholder: 'The computer will talk you through its shots…',
+    });
+    else window.PixelPoolChat.hide();
+  }
+  if (isBotSeat(turn)) scheduleBotTurn(); // the computer breaks
 }
 
 /* ============================== ONLINE PLAY ============================= */
@@ -1377,6 +1819,7 @@ function applyState(msg) {
   if (msg.stats && window.MatchStats) window.MatchStats.applyRemote(msg.stats);
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; wasMoving = false; lastAimKey = '';
+  hidePlaceGhost();    // a 'place' phase re-arms it on the next mouse move
   setCalledPocket(-1); // a new shot begins; any previous 8-ball call is cleared
   breakShot = false;   // the opponent has resolved a shot, so the break is over
   updateHUD();
@@ -1445,15 +1888,18 @@ function interpSample() {
   }
 }
 
-// Opponent's floating cue, positioned from their streamed aim.
+// The floating cue shown while the local player spectates — driven by the online
+// opponent's streamed aim, or by the computer's aim in vs-CPU mode. Both share
+// the same ghost stick and POV; a strike animation temporarily owns the stick.
 function updateGhostCue() {
-  if (watcherStriking) return; // the strike animation in applyShoot() owns it for now
-  if (watching() && remoteAim && !cue.potted && state !== S.ROLLING) {
-    const yaw = remoteAim.yaw;
+  if (watcherStriking || botStriking) return; // a strike animation owns the stick now
+  const aim = watching() ? remoteAim : (botTurn() ? botAim : null);
+  if (aim && !cue.potted && state !== S.ROLLING) {
+    const yaw = aim.yaw;
     const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
     const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
     const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
-    ghostStick.position.copy(base).addScaledVector(back, 0.035 + (remoteAim.pull || 0));
+    ghostStick.position.copy(base).addScaledVector(back, 0.035 + (aim.pull || 0));
     ghostStick.lookAt(base.clone().addScaledVector(back, 5));
     ghostStick.visible = true;
   } else {
@@ -1467,6 +1913,7 @@ function startOnline(opts) {
   // Guard so a back-to-back online match doesn't stash the previous opponent's.
   if (!onlineMode) offlineNames = [players[0].cfg.name, players[1].cfg.name];
   onlineMode = true;
+  botMode = false; clearBotTimer(); botAim = null; botStriking = false; // never both at once
   mySeat = opts.mySeat | 0;
   rng = mulberry32(opts.seed >>> 0);
   players[0].cfg.name = opts.names[0];
@@ -1653,8 +2100,18 @@ function buildSetupUI() {
   players.forEach((p, i) => {
     const card = document.createElement('div');
     card.className = 'playerCard';
-    card.innerHTML = `<h2>Player ${i + 1}</h2><label>Name</label>`;
+    const isBot = vsCPU && i === 1; // seat 1 is the computer in vs-CPU mode
 
+    if (isBot) {
+      p.cfg.name = 'Computer';
+      card.innerHTML = `<h2>Computer</h2><div class="cpuBadge">🤖 CPU opponent</div>`;
+      row.appendChild(card);
+      return;
+    }
+
+    // Restore a default name if toggling back from a previous vs-CPU selection.
+    if (p.cfg.name === 'Computer') p.cfg.name = `Player ${i + 1}`;
+    card.innerHTML = `<h2>Player ${i + 1}</h2><label>Name</label>`;
     const nameIn = document.createElement('input');
     nameIn.type = 'text'; nameIn.maxLength = 14; nameIn.value = p.cfg.name;
     nameIn.addEventListener('input', () => {
@@ -1663,6 +2120,21 @@ function buildSetupUI() {
     card.appendChild(nameIn);
     row.appendChild(card);
   });
+}
+
+// OFFLINE setup toggle: 2-player hot-seat vs. the computer opponent. Re-renders
+// the player cards (seat 2 becomes the CPU) and is read by startMatch().
+function setVsCPU(on) {
+  vsCPU = on;
+  const pBtn = document.getElementById('vsPlayerBtn'), cBtn = document.getElementById('vsCpuBtn');
+  if (pBtn) pBtn.classList.toggle('sel', !on);
+  if (cBtn) cBtn.classList.toggle('sel', on);
+  buildSetupUI();
+}
+{
+  const pBtn = document.getElementById('vsPlayerBtn'), cBtn = document.getElementById('vsCpuBtn');
+  if (pBtn) pBtn.addEventListener('click', () => setVsCPU(false));
+  if (cBtn) cBtn.addEventListener('click', () => setVsCPU(true));
 }
 
 function selectTableStyle(i, announce) {
@@ -1695,6 +2167,9 @@ document.getElementById('quitBtn').addEventListener('click', () => {
   } else {
     document.getElementById('hud').classList.add('hidden');
     if (window.SettingsPanel) window.SettingsPanel.hide();
+    // Stop the computer mid-thought and close its commentary feed.
+    clearBotTimer(); botMode = false; botAim = null; botStriking = false;
+    if (window.PixelPoolChat) window.PixelPoolChat.hide();
     state = S.SETUP;
     cam.goal.set(0, TABLE_Y, 0);
     cam.radius = 3.2; cam.pitch = 0.5;
@@ -1732,8 +2207,9 @@ canvas.addEventListener('pointerdown', e => {
   ptr.down = true; ptr.id = e.pointerId; ptr.moved = 0;
   ptr.x = e.clientX; ptr.y = e.clientY;
 
-  // While watching the opponent, the camera still orbits but the cue is locked.
-  if (watching()) { ptr.mode = 'orbit'; return; }
+  // While spectating (online opponent, or the computer's turn), the camera still
+  // orbits but the cue is locked out of the human's control.
+  if (spectating()) { ptr.mode = 'orbit'; return; }
 
   if (state === S.PLACING) {
     ptr.mode = 'place'; // tap places the ball; dragging orbits the camera
@@ -1760,7 +2236,11 @@ canvas.addEventListener('pointerdown', e => {
 });
 
 canvas.addEventListener('pointermove', e => {
-  if (state === S.PLACING && !ptr.down) updatePlaceGhost(e.clientX, e.clientY);
+  // Only preview a placement the local player is actually allowed to make.
+  // Without the spectating() guard, moving the mouse while the computer (or an
+  // online opponent) held ball-in-hand summoned the ghost, and their placement
+  // path never hid it again — leaving a translucent cue ball on the felt.
+  if (state === S.PLACING && !ptr.down && !spectating()) updatePlaceGhost(e.clientX, e.clientY);
   if (!ptr.down || e.pointerId !== ptr.id) return;
   const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
 
@@ -1817,8 +2297,7 @@ canvas.addEventListener('pointerup', e => {
       cue.z = placeGhost.position.z;
       cue.potted = false; cue.sink = 0;
       cue.mesh.visible = true; cue.mesh.scale.setScalar(1);
-      placeGhost.visible = false;
-      canvas.classList.remove('placing');
+      hidePlaceGhost();
       enterAim();
       unpinToast(); // the ball is placed; release the "place the cue ball" prompt
       // If the shooter is down to the 8-ball, placing hands straight over to the
@@ -1929,6 +2408,14 @@ function pocketAtPointer(cx, cy) {
   return bd < 0.18 * 0.18 ? best : -1;
 }
 
+// Take down the ball-in-hand preview (mesh + placing cursor). Safe to call at
+// any time; every exit from S.PLACING goes through here so a ghost can't be
+// left behind by a path that didn't create it.
+function hidePlaceGhost() {
+  placeGhost.visible = false;
+  canvas.classList.remove('placing');
+}
+
 function updatePlaceGhost(cx, cy) {
   const ndc = new THREE.Vector2(
     (cx / canvas.clientWidth) * 2 - 1,
@@ -1980,6 +2467,7 @@ function frame(now) {
   if (!watching() && state === S.ROLLING && wasMoving && !moving && !striking) {
     resolveShot();
     if (onlineMode) onlineAfterResolve(); // broadcast the authoritative result
+    else if (isBotSeat(turn) && state !== S.END) scheduleBotTurn();
   }
   wasMoving = moving;
 
@@ -2021,18 +2509,24 @@ rackBalls();
 updateHUD();
 requestAnimationFrame(frame);
 
-/* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break */
+/* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break,
+   ?cpu makes seat 2 the computer (vs-CPU mode), ?botbreak lets it break,
+   ?botvbot gives the computer BOTH seats (self-play, for measuring its pot
+   rate), ?dbg exposes a live state dump (#dbg) without auto-firing. */
 const q = new URLSearchParams(location.search);
 if (q.has('autostart')) {
   document.getElementById('landingOverlay').classList.add('hidden');
   document.getElementById('modeOverlay').classList.add('hidden');
+  if (q.has('cpu')) vsCPU = true;
+  if (q.has('botbreak')) forceBotBreak = true; // test: force the computer to break
+  if (q.has('botvbot')) bothBotSeats = true; // test: computer plays both seats (self-play stats)
   startMatch();
-  if (q.has('autoshot')) {
+  if (q.has('autoshot') || q.has('dbg')) {
     const dbg = document.createElement('div');
     dbg.id = 'dbg';
     dbg.style.display = 'none';
     document.body.appendChild(dbg);
-    setTimeout(() => fire(Math.min(1, parseFloat(q.get('autoshot')) || 0.9)), 500);
+    if (q.has('autoshot')) setTimeout(() => fire(Math.min(1, parseFloat(q.get('autoshot')) || 0.9)), 500);
     setInterval(() => {
       dbg.textContent = JSON.stringify({
         state, turn,

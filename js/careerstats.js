@@ -25,7 +25,9 @@
   // Same per-tab session key as js/auth.js.
   const getToken = () => { try { return sessionStorage.getItem('pp_token'); } catch { return null; } };
 
-  const rate = (n, d) => (d ? Math.round((100 * n) / d) + '%' : '—');
+  // Clamped at 100% — see js/stats.js. These totals are summed across every
+  // game on record, so one bad historical row must not produce a >100% rate.
+  const rate = (n, d) => (d ? Math.min(100, Math.round((100 * n) / d)) + '%' : '—');
   const fouls = t => (t.scratches | 0) + (t.noContact | 0) + (t.wrongBall | 0);
 
   // [label, value(totals), isSubRow] — mirrors the per-game recap's ROWS
