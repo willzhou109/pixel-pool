@@ -105,6 +105,28 @@ const bearer = req => (req.headers.authorization || '').replace(/^Bearer\s+/i, '
 async function handleApi(req, res, pathname, searchParams) {
   const ip = req.socket.remoteAddress || 'unknown';
 
+  // Tiny public config the front-end needs before login: whether Google
+  // sign-in is set up on this deployment, and if so, which client id to use.
+  // No secret here — an OAuth client id is meant to be public.
+  if (pathname === '/api/config' && req.method === 'GET') {
+    return sendJson(res, 200, { googleClientId: auth.GOOGLE_CLIENT_ID || null });
+  }
+
+  if (pathname === '/api/auth/google' && req.method === 'POST') {
+    if (rateLimited(ip)) return sendJson(res, 429, { error: 'Too many attempts. Wait a minute and try again.' });
+    let body;
+    try { body = await readJsonBody(req); }
+    catch { return sendJson(res, 400, { error: 'Bad request.' }); }
+    try {
+      const { status, body: out } = await auth.googleLogin(body && body.credential);
+      if (out.isNewUser && out.username) out.avatar = avatar.assignRandom(out.username);
+      return sendJson(res, status, out);
+    } catch (e) {
+      console.error('[api] google auth error:', e);
+      return sendJson(res, 500, { error: 'Server error. Try again.' });
+    }
+  }
+
   if (pathname === '/api/me' && req.method === 'GET') {
     const { status, body } = auth.me(bearer(req));
     // Compose the avatar + friend count in here (rather than in auth.js) so

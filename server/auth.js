@@ -10,8 +10,11 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { createUser, findUser } = require('./db');
+const { createUser, findUser, findUserByGoogleId, createGoogleUser } = require('./db');
 const { getRating } = require('./ratings');
+const googleAuth = require('./googleAuth');
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || null;
 
 /* --------------------------------- secret -------------------------------- */
 // Signing secret for session tokens. Set PP_SECRET in the environment for a
@@ -120,6 +123,62 @@ async function login(body) {
   return { status: 200, body: { token: signToken(user.username), username: user.username, createdAt: user.created_at } };
 }
 
+/* --------------------------- Google sign-in ------------------------------ */
+// Turn an email's local part into a valid, unique username. Deliberately
+// never matches by username to an *existing* password account — only a
+// google_id match counts as "this is the same person" (see db.js). Otherwise
+// someone could pre-register the username a Gmail address would produce and
+// hijack the Google sign-in flow for that address.
+function usernameFromEmail(email) {
+  let base = String(email).split('@')[0].replace(/[^A-Za-z0-9_]/g, '');
+  if (base.length < 3) base = (base + '_user').slice(0, 20);
+  base = base.slice(0, 20);
+  if (findUser(base) === undefined) return base;
+  for (let i = 1; i < 1000; i++) {
+    const suffix = String(i);
+    const candidate = (base.slice(0, 20 - suffix.length) + suffix);
+    if (findUser(candidate) === undefined) return candidate;
+  }
+  // Astronomically unlikely fallback — still unique, just not pretty.
+  return `user_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+async function googleLogin(idToken) {
+  if (!GOOGLE_CLIENT_ID) {
+    return { status: 501, body: { error: 'Google sign-in is not configured on this server.' } };
+  }
+  let payload;
+  try {
+    payload = await googleAuth.verifyIdToken(idToken, GOOGLE_CLIENT_ID);
+  } catch (e) {
+    return { status: 401, body: { error: 'Could not verify Google sign-in.' } };
+  }
+  if (!payload.email_verified) {
+    return { status: 401, body: { error: 'Your Google email is not verified.' } };
+  }
+
+  const existing = findUserByGoogleId(payload.sub);
+  if (existing) {
+    return {
+      status: 200,
+      body: { token: signToken(existing.username), username: existing.username, createdAt: existing.created_at },
+    };
+  }
+
+  // First time this Google account has signed in — provision a new account.
+  // The password hash is a random value the account owner never sees or
+  // types; password login is simply never possible for this account.
+  const username = usernameFromEmail(payload.email || 'player');
+  const randomPassword = crypto.randomBytes(32).toString('hex');
+  const hash = await hashPassword(randomPassword);
+  createGoogleUser(username, hash, payload.sub);
+  const user = findUser(username);
+  return {
+    status: 201,
+    body: { token: signToken(username), username, createdAt: user.created_at, isNewUser: true },
+  };
+}
+
 function me(token) {
   const username = verifyToken(token);
   if (!username) return { status: 401, body: { error: 'Not signed in.' } };
@@ -138,4 +197,4 @@ function me(token) {
   };
 }
 
-module.exports = { signup, login, me, verifyToken };
+module.exports = { signup, login, me, verifyToken, googleLogin, GOOGLE_CLIENT_ID };

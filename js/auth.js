@@ -9,6 +9,13 @@
  * The auth API is same-origin (fetch('/api/...')), so the game must be opened
  * through the server (http://localhost:3000), not from a file:// path. If the
  * server isn't reachable, every action fails gracefully with a clear message.
+ *
+ * Also renders a "Sign in with Google" button (Google Identity Services) into
+ * both overlays when the server reports a client id via GET /api/config —
+ * see server/auth.js's googleLogin and server/googleAuth.js for the token
+ * verification. Sharing one account model: Google sign-in reuses the same
+ * users table and session tokens as password login, so everything downstream
+ * (ratings, friends, history) works identically either way.
  */
 (function () {
   'use strict';
@@ -24,6 +31,8 @@
     signupBtn: $('signupBtn'), signupErr: $('signupErr'),
     toSignup: $('toSignup'), toLogin: $('toLogin'),
     loginBack: $('loginBack'), signupBack: $('signupBack'),
+    loginGoogleDivider: $('loginGoogleDivider'), loginGoogleSlot: $('loginGoogleSlot'),
+    signupGoogleDivider: $('signupGoogleDivider'), signupGoogleSlot: $('signupGoogleSlot'),
   };
   if (!el.login || !el.signup) { console.warn('Auth: overlays missing'); return; }
 
@@ -81,6 +90,16 @@
     btn.textContent = on ? 'PLEASE WAIT…' : label;
   }
 
+  // Shared success path for password login/signup AND Google sign-in.
+  function completeLogin(data) {
+    setSession(data.token, data.username);
+    // Open the realtime connection right away — the player is connected for
+    // their whole session from the moment they log in, so entering the
+    // lobby later is instant. Only logout disconnects.
+    if (window.PixelPoolNet) window.PixelPoolNet.connect(data.token);
+    showHome(data.username);
+  }
+
   async function submit({ userEl, passEl, errEl, btn, label, path }) {
     errEl.textContent = '';
     const username = userEl.value.trim();
@@ -90,19 +109,70 @@
     try {
       const { ok, data } = await post(path, { username, password });
       if (!ok) { errEl.textContent = data.error || 'Something went wrong.'; return; }
-      setSession(data.token, data.username);
       passEl.value = '';
-      // Open the realtime connection right away — the player is connected for
-      // their whole session from the moment they log in, so entering the
-      // lobby later is instant. Only logout disconnects.
-      if (window.PixelPoolNet) window.PixelPoolNet.connect(data.token);
-      showHome(data.username);
+      completeLogin(data);
     } catch {
       errEl.textContent = 'Can\'t reach the server. Is it running (localhost:3000)?';
     } finally {
       busy(btn, false, label);
     }
   }
+
+  /* ---------------------------- Google sign-in ---------------------------- */
+  // Whichever of login/signup is currently on screen gets the error message.
+  function currentAuthErrEl() {
+    if (!el.login.classList.contains('hidden')) return el.loginErr;
+    if (!el.signup.classList.contains('hidden')) return el.signupErr;
+    return null;
+  }
+
+  async function onGoogleCredential(response) {
+    const errEl = currentAuthErrEl();
+    if (errEl) errEl.textContent = '';
+    try {
+      const { ok, data } = await post('/api/auth/google', { credential: response.credential });
+      if (!ok) { if (errEl) errEl.textContent = data.error || 'Google sign-in failed.'; return; }
+      completeLogin(data);
+    } catch {
+      if (errEl) errEl.textContent = 'Can\'t reach the server. Is it running (localhost:3000)?';
+    }
+  }
+
+  // Poll briefly for the (async/defer-loaded) Google script, then render the
+  // button into both the login and signup overlays. If GOOGLE_CLIENT_ID isn't
+  // set on the server, /api/config returns null and this never fires — the
+  // "OR" divider and button slot stay hidden, so an unconfigured deployment
+  // looks exactly like it did before this feature existed.
+  async function initGoogleSignIn() {
+    let clientId;
+    try {
+      const res = await fetch('/api/config');
+      const cfg = await res.json();
+      clientId = cfg && cfg.googleClientId;
+    } catch { return; }
+    if (!clientId) return;
+
+    const waitForGis = () => new Promise(resolve => {
+      const start = Date.now();
+      (function poll() {
+        if (window.google && window.google.accounts && window.google.accounts.id) return resolve(true);
+        if (Date.now() - start > 8000) return resolve(false); // give up quietly
+        setTimeout(poll, 100);
+      })();
+    });
+    if (!(await waitForGis())) return;
+
+    window.google.accounts.id.initialize({ client_id: clientId, callback: onGoogleCredential });
+    for (const slot of [el.loginGoogleSlot, el.signupGoogleSlot]) {
+      if (!slot) continue;
+      window.google.accounts.id.renderButton(slot, {
+        theme: 'filled_black', size: 'large', shape: 'rectangular', text: 'continue_with',
+      });
+    }
+    if (el.loginGoogleDivider) el.loginGoogleDivider.classList.remove('hidden');
+    if (el.signupGoogleDivider) el.signupGoogleDivider.classList.remove('hidden');
+  }
+  initGoogleSignIn();
 
   /* ------------------------------- listeners ----------------------------- */
   el.loginForm.addEventListener('submit', e => {

@@ -773,6 +773,17 @@
   .authLink { font-size: 8px; color: var(--text-dim); margin-top: 16px; }
   .authLink a { color: var(--accent); text-decoration: none; cursor: pointer; }
   .authLink a:hover { text-decoration: underline; }
+  /* "or" divider + Google button slot. Hidden by default — auth.js only shows
+     it once GET /api/config confirms a client id is set, so a deployment that
+     hasn't configured Google sign-in shows nothing extra at all. */
+  .authDivider {
+    display: flex; align-items: center; gap: 10px; margin-top: 18px;
+    font-size: 7px; color: var(--text-dim);
+  }
+  .authDivider::before, .authDivider::after {
+    content: ''; flex: 1; height: 3px; background: var(--panel-border);
+  }
+  .googleBtnSlot { margin-top: 12px; display: flex; justify-content: center; min-height: 40px; }
 </style>
 </head>
 <body>
@@ -1059,6 +1070,8 @@
       <button class="bigBtn" id="loginBtn" type="submit">LOG IN</button>
     </form>
     <div class="authLink">New user? <a id="toSignup">Sign up here</a></div>
+    <div class="authDivider hidden" id="loginGoogleDivider">OR</div>
+    <div class="googleBtnSlot" id="loginGoogleSlot"></div>
     <button class="bigBtn ghostBtn" id="loginBack">BACK</button>
   </div>
 </div>
@@ -1077,6 +1090,8 @@
       <button class="bigBtn" id="signupBtn" type="submit">SIGN UP</button>
     </form>
     <div class="authLink">Have an account? <a id="toLogin">Log in</a></div>
+    <div class="authDivider hidden" id="signupGoogleDivider">OR</div>
+    <div class="googleBtnSlot" id="signupGoogleSlot"></div>
     <button class="bigBtn ghostBtn" id="signupBack">BACK</button>
   </div>
 </div>
@@ -1123,6 +1138,10 @@
   </div>
 </div>
 
+<!-- Google Identity Services: renders the "Sign in with Google" button and
+     hands auth.js a signed ID token. Only used if the server reports a
+     Google client id via GET /api/config; harmless (unused) otherwise. -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="lib/three.min.js"></script>
 <script src="js/mode.js"></script>
 <script src="js/landing.js"></script>
