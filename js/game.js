@@ -2096,6 +2096,7 @@ function resetZoom() {
   cam.radius = START_RADIUS;
 }
 document.getElementById('resetZoomBtn').addEventListener('click', resetZoom);
+document.getElementById('helpClose').addEventListener('click', () => document.getElementById('help').classList.add('hidden'));
 
 /* ----------------------------- setup screen ---------------------------- */
 
