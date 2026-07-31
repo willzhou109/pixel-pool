@@ -1,0 +1,16 @@
+{
+  "name": "pixel-pool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pixel Pool — deploy entry point. See server/README.md for the backend.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.3"
+  }
+}
