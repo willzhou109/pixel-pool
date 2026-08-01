@@ -47,11 +47,18 @@
   const Lobby = () => window.PixelPoolLobby;
   const authToken = () => (window.PixelPoolAuth ? window.PixelPoolAuth.getToken() : null);
 
-  const GAME_NAMES = { '9ball': '9-BALL', '10ball': '10-BALL', snooker: 'SNOOKER' };
+  const GAME_NAMES = { '8ball': '8-BALL', '9ball': '9-BALL', '10ball': '10-BALL', snooker: 'SNOOKER' };
+  // Games with rules behind them (game.js + js/nineball.js). The rest of the
+  // tabs are placeholders that just say "coming soon".
+  const PLAYABLE = { '8ball': true, '9ball': true };
+  // 9-ball is local two-player only so far: matchmaking has no game type on the
+  // wire, and the computer opponent only knows 8-ball.
+  const ONLINE_GAMES = { '8ball': true };
 
   let guest = false;
   let currentUsername = null;
   let mode = 'offline'; // 'offline' | 'online' — what PLAY will launch
+  let game = '8ball';   // which rule set the tabs have selected
 
   // Visual toggle only — swaps the highlighted button and the inline panel
   // shown below (offline setup vs. online matchmaking). Activating/suspending
@@ -102,12 +109,34 @@
   }
 
   /* ------------------------------ game tabs ------------------------------ */
-  // Only 8-ball is playable; the rest flash a "coming soon" note and leave the
-  // selection on 8-ball.
+  // 8-ball and 9-ball are playable; the rest flash a "coming soon" note and
+  // leave the selection where it was. Picking a game tells game.js which rule
+  // set the next match runs (and re-racks the showcase table behind the menu).
+  function setGame(id) {
+    game = id;
+    tabs.forEach(t => t.classList.toggle('sel', t.dataset.game === id));
+    if (window.PoolMatch && window.PoolMatch.setGame) window.PoolMatch.setGame(id);
+  }
+
   tabs.forEach(tab => tab.addEventListener('click', () => {
+    const id = tab.dataset.game;
+    if (!PLAYABLE[id]) {
+      if (note) note.textContent = GAME_NAMES[id] + ' IS COMING SOON!';
+      return;
+    }
+    setGame(id);
     if (!note) return;
-    const game = tab.dataset.game;
-    note.textContent = game === '8ball' ? '' : GAME_NAMES[game] + ' IS COMING SOON!';
+    // Selecting a game that can't go online yet: say so, and drop back to the
+    // offline panel rather than leaving a dead ONLINE selection showing.
+    if (!ONLINE_GAMES[id]) {
+      note.textContent = GAME_NAMES[id] + ' IS TWO PLAYERS AT ONE SCREEN FOR NOW.';
+      if (mode === 'online') {
+        setMode('offline');
+        if (Lobby()) Lobby().suspend();
+      }
+    } else {
+      note.textContent = '';
+    }
   }));
 
   /* --------------------------- offline / online --------------------------- */
@@ -122,6 +151,10 @@
   onlineBtn.addEventListener('click', () => {
     if (guest) {
       if (note) note.textContent = 'Online play requires an account — please log in.';
+      return;
+    }
+    if (!ONLINE_GAMES[game]) {
+      if (note) note.textContent = GAME_NAMES[game] + ' ONLINE IS COMING SOON — PICK 8-BALL TO PLAY ONLINE.';
       return;
     }
     if (note) note.textContent = '';

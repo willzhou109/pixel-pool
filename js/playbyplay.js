@@ -28,6 +28,7 @@
 
   const FOUL_LABEL = {
     scratch: 'SCRATCH', noContact: 'FOUL: NO CONTACT', wrongBall: 'FOUL: WRONG BALL FIRST',
+    noRail: 'FOUL: NO RAIL',   // 9-ball only
   };
 
   /* ------------------------------ board draw ------------------------------ */

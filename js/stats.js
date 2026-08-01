@@ -27,8 +27,11 @@
 
   const $ = id => document.getElementById(id);
 
+  // noRail is 9-ball's drive-to-rail foul; it stays 0 in 8-ball, and its recap
+  // row is hidden unless somebody actually committed one.
   const blank = () => ({
-    shots: 0, pots: 0, potShots: 0, scratches: 0, noContact: 0, wrongBall: 0, defensive: 0,
+    shots: 0, pots: 0, potShots: 0, scratches: 0, noContact: 0, wrongBall: 0, noRail: 0,
+    defensive: 0,
     streak: 0, bestStreak: 0,   // current / longest run of consecutive potting shots
   });
   let seats = [blank(), blank()];
@@ -83,6 +86,9 @@
     if (foul === 'scratch') s.scratches++;
     else if (foul === 'noContact') { s.noContact++; seats[1 - shooter].defensive++; }
     else if (foul === 'wrongBall') { s.wrongBall++; seats[1 - shooter].defensive++; }
+    // A legal hit that died without reaching a rail is a foul, but it isn't the
+    // opponent's doing — no defensive credit.
+    else if (foul === 'noRail') s.noRail++;
   }
 
   /* ------------------------- online sync (game.js) ------------------------ */
@@ -114,14 +120,15 @@
     return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
   }
 
-  const fouls = s => s.scratches + s.noContact + s.wrongBall;
+  const fouls = s => s.scratches + s.noContact + s.wrongBall + (s.noRail | 0);
   // Clamped at 100%: these are "shots that did X out of shots taken", so the
   // ratio is <= 1 by construction — but the same renderer also shows stored
   // career/history records, and a malformed one must never read as 130%.
   const rate = (n, d) => d ? Math.min(100, Math.round(100 * n / d)) + '%' : '—';
 
-  // [label, value-for-seat, isSubRow] — sub-rows are the per-type foul
-  // breakdown indented under the FOULS total.
+  // [label, value-for-seat, isSubRow, showIf] — sub-rows are the per-type foul
+  // breakdown indented under the FOULS total. A row with a showIf predicate is
+  // only drawn when it has something to say (NO RAIL can't happen in 8-ball).
   const ROWS = [
     ['SHOTS TAKEN',      s => s.shots],
     ['BALLS POCKETED',   s => s.pots],
@@ -131,6 +138,7 @@
     ['SCRATCHES',        s => s.scratches, true],
     ['NO CONTACT',       s => s.noContact, true],
     ['WRONG BALL FIRST', s => s.wrongBall, true],
+    ['NO RAIL',          s => s.noRail | 0, true, sd => sd[0].noRail || sd[1].noRail],
     ['FOUL RATE',        s => rate(fouls(s), s.shots)],
     ['DEFENSIVE SHOTS',  s => s.defensive],
   ];
@@ -152,7 +160,8 @@
     tableEl.appendChild(cell('recapLabel', ''));
     tableEl.appendChild(cell('recapHead', seatNames[0]));
     tableEl.appendChild(cell('recapHead', seatNames[1]));
-    for (const [label, get, sub] of ROWS) {
+    for (const [label, get, sub, showIf] of ROWS) {
+      if (showIf && !showIf(sd)) continue;
       tableEl.appendChild(cell('recapLabel' + (sub ? ' recapSub' : ''), label));
       tableEl.appendChild(cell('recapVal', String(get(sd[0]))));
       tableEl.appendChild(cell('recapVal', String(get(sd[1]))));

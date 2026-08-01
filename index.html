@@ -453,6 +453,8 @@
   }
   .oppTab:active { transform: translate(1px, 1px); }
   .oppTab.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
+  /* VS COMPUTER is off the table in 9-ball — the bot only knows 8-ball. */
+  .oppTab:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
   .cpuBadge { font-size: 9px; color: var(--accent); margin-top: 14px; line-height: 1.9; }
   #startBtn, #findMatchBtn { font-size: calc(16px * var(--home-scale)); padding: 18px 52px; margin-top: 20px; }
   #homeOnline #lobbyStatus { font-size: calc(9px * var(--home-scale)); margin-top: 0; }
@@ -811,6 +813,9 @@
 
 <div id="help" class="hidden">
   <button id="helpClose" aria-label="Close help">&#10005;</button>
+  <span class="helpHead" id="helpGameHead">8-BALL</span><br>
+  <span id="helpGame">Pot your group, then the 8 in a pocket you call.</span><br>
+  <br>
   <span class="helpHead">MOUSE</span><br>
   <b>DRAG</b> orbit camera<br>
   <b>SCROLL / PINCH</b> zoom<br>
@@ -885,7 +890,7 @@
 
       <div id="gameTabs">
         <button class="gameTab sel" data-game="8ball">8-BALL</button>
-        <button class="gameTab soon" data-game="9ball">9-BALL</button>
+        <button class="gameTab" data-game="9ball">9-BALL</button>
         <button class="gameTab soon" data-game="10ball">10-BALL</button>
         <button class="gameTab soon" data-game="snooker">SNOOKER</button>
       </div>
@@ -1173,6 +1178,7 @@
 <script src="js/bottalk.js"></script>
 <script src="js/bot.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/nineball.js"></script>
 <script src="js/game.js"></script>
 <script src="js/online.js"></script>
 <script src="js/backgrounds.js"></script>
@@ -1181,5 +1187,9 @@
 <script src="js/settings.js"></script>
 <script src="js/keyboard.js"></script>
 <script src="js/homeview.js"></script>
+
+<!-- Cloudflare Web Analytics -->
+<script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "3b5f75315f0a412c9cb523e2c141fc24"}'></script>
+<!-- End Cloudflare Web Analytics -->
 </body>
 </html>

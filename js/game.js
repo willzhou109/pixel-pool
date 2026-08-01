@@ -570,7 +570,26 @@ function rackBalls() {
     b.mesh.quaternion.identity();
   }
   cue.x = -PW / 2; cue.z = 0;
+  if (gameMode === '9ball') rackNine(); else rackEight();
+  breakShot = true; // next shot is the opening break
+  syncBallMeshes(0);
+}
 
+// 9-ball: the nine-ball diamond (js/nineball.js owns the layout). Balls 10-15
+// sit the game out — parked as already-potted, which is exactly the state every
+// consumer already skips: physics, the aim assist and the recap boards alike.
+function rackNine() {
+  const N = window.PoolNineBall;
+  for (const { id, x, z } of N.rack({ PW, R, shuffle })) {
+    balls[id].x = x; balls[id].z = z;
+  }
+  for (const id of N.IDLE_BALLS) {
+    const b = balls[id];
+    b.potted = true; b.sink = 0; b.mesh.visible = false;
+  }
+}
+
+function rackEight() {
   const solids = shuffle([1, 2, 3, 4, 5, 6, 7]);
   const stripes = shuffle([9, 10, 11, 12, 13, 14, 15]);
   const cornerA = solids.pop(), cornerB = stripes.pop();
@@ -580,7 +599,6 @@ function rackBalls() {
   // start-of-frame overlap), row spacing d·√3/2 so every neighbour just touches.
   // A gap-free rack transfers the break's energy cleanly and scatters the pack.
   const d = 2 * R * 1.0006, dx = d * Math.sqrt(3) / 2;
-  let slot = 0;
   for (let row = 0; row < 5; row++) {
     for (let i = 0; i <= row; i++) {
       let id;
@@ -591,11 +609,39 @@ function rackBalls() {
       const b = balls[id];
       b.x = PW / 2 + row * dx;
       b.z = (i - row / 2) * d;
-      slot++;
     }
   }
-  breakShot = true; // next shot is the opening break
-  syncBallMeshes(0);
+}
+
+// Bring a ball back onto the table (9-ball spots an illegally pocketed 9). It
+// goes on the foot spot, or — if that's occupied — the first clear gap up the
+// table from it, so spotting can never bury it inside another ball.
+function spotBall(id) {
+  const b = balls[id];
+  const home = window.PoolNineBall.spot({ PW, R });
+  const step = 2 * R * 1.06;
+  let x = home.x;
+  for (let k = 0; k < 60; k++) {
+    const cand = Math.min(LIMX, home.x + k * step);
+    if (spotClear(cand, home.z, id)) { x = cand; break; }
+    x = cand;
+  }
+  b.potted = false; b.sink = 0; b.vx = 0; b.vz = 0;
+  b.x = x; b.z = home.z;
+  b.mesh.visible = true; b.mesh.scale.setScalar(1);
+  b.mesh.position.set(b.x, BALL_Y, b.z);
+}
+
+// Is (x, z) free of every live ball but `skipId`, and clear of the pockets?
+function spotClear(x, z, skipId) {
+  for (const b of balls) {
+    if (b.id === skipId || b.potted) continue;
+    if ((b.x - x) ** 2 + (b.z - z) ** 2 < (2 * R * 1.02) ** 2) return false;
+  }
+  for (const p of POCKETS) {
+    if ((p.x - x) ** 2 + (p.z - z) ** 2 < (p.r + R) ** 2) return false;
+  }
+  return true;
 }
 
 function syncBallMeshes(dt) {
@@ -622,7 +668,10 @@ function syncBallMeshes(dt) {
 
 /* ================================ PHYSICS =============================== */
 
-let shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+// What the current stroke has done so far. `cushion` records a rail contact
+// made AFTER the cue ball found an object ball — 9-ball's drive-to-rail rule
+// (js/nineball.js) turns on exactly that ordering, so it's gated on firstHit.
+let shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
 
 function anyMoving() {
   for (const b of balls) if (!b.potted && (b.vx !== 0 || b.vz !== 0)) return true;
@@ -698,6 +747,7 @@ function physicsStep(h) {
           b.vz = -b.vz * REST_CUSH;
           b.vx *= (1 - CUSH_GRIP);
           sfx.cushion(Math.abs(b.vz));
+          if (shotEvents.firstHit !== null) shotEvents.cushion = true;
         }
       }
     }
@@ -711,6 +761,7 @@ function physicsStep(h) {
           b.vx = -b.vx * REST_CUSH;
           b.vz *= (1 - CUSH_GRIP);
           sfx.cushion(Math.abs(b.vx));
+          if (shotEvents.firstHit !== null) shotEvents.cushion = true;
         }
       }
     }
@@ -950,6 +1001,17 @@ callMarker.rotation.x = -Math.PI / 2;
 callMarker.visible = false;
 scene.add(callMarker);
 
+// Cyan ring around the ball that must be struck first — 9-ball only, where the
+// target changes every time one drops and the numbers on the balls are hard to
+// read from the low shooting camera.
+const targetRing = new THREE.Mesh(
+  new THREE.RingGeometry(R * 1.3, R * 1.75, 22),
+  new THREE.MeshBasicMaterial({ color: '#3fd0e0', transparent: true, opacity: 0.85, side: THREE.DoubleSide })
+);
+targetRing.rotation.x = -Math.PI / 2;
+targetRing.visible = false;
+scene.add(targetRing);
+
 /* aim ray: first hit against balls (ghost-ball contact) or cushion planes */
 function castAim(px, pz, dx, dz) {
   let bestT = Infinity, hitBall = null;
@@ -974,8 +1036,19 @@ function castAim(px, pz, dx, dz) {
   return { t: bestT, ball: hitBall };
 }
 
+// Ring the lowest ball on the table (9-ball's legal target) while somebody is
+// lining up. Hidden mid-shot, so it never chases a ball that's still rolling.
+function updateTargetRing() {
+  const show = gameMode === '9ball' &&
+    (state === S.AIM || state === S.CHARGE || state === S.PLACING);
+  const id = show ? lowestBall() : 0;
+  targetRing.visible = id > 0;
+  if (id > 0) targetRing.position.set(balls[id].x, TABLE_Y + 0.003, balls[id].z);
+}
+
 function updateAimVisuals() {
   updateGhostCue(); // opponent's floating cue (online watcher)
+  updateTargetRing(); // 9-ball: which ball has to be hit first
   const aiming = (state === S.AIM || state === S.CHARGE) && !cue.potted && myTurn();
   const AA = window.AimAssist;
   // "Lines" assist toggles the guide/object/ghost visuals; the cue stick and
@@ -1035,6 +1108,11 @@ function updateAimVisuals() {
 
 const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CALLING: 6 };
 let state = S.SETUP;
+// Which rule set this match runs: '8ball' (the default) or '9ball'. Picked on
+// the home screen's game tabs and locked in for the match — see setGame().
+// Only the rack, the stroke verdict and the HUD differ; everything else (the
+// physics, ball-in-hand, the camera, the recap) is shared.
+let gameMode = '8ball';
 let turn = 0;
 let breakShot = false;        // true until the opening break has been resolved
 let calledPocket = -1;        // pocket index nominated for an 8-ball shot (-1 = none)
@@ -1124,6 +1202,11 @@ function remaining(group) {
 
 function groupOf(id) { return id < 8 ? 'solid' : 'stripe'; }
 
+// 9-ball: the lowest-numbered ball still on the table right now (0 = none).
+function lowestBall() {
+  return window.PoolNineBall.lowest(id => balls[id].potted);
+}
+
 // A seat is "on the 8" once its group is cleared and the 8 is still on the table.
 function isOnEight(seat) {
   const g = players[seat].group;
@@ -1145,7 +1228,9 @@ function setCalledPocket(i) {
 function enterAim() {
   hidePlaceGhost(); // never carry a ball-in-hand preview into a shot
   setCalledPocket(-1);
-  if (myTurn() && isOnEight(turn)) {
+  // Called shots are an 8-ball rule; 9-ball wins on any legal 9, so it never
+  // stops to nominate a pocket.
+  if (myTurn() && gameMode === '8ball' && isOnEight(turn)) {
     state = S.CALLING;
     enterSurveyCam(); // bird's-eye view to survey every pocket
   } else {
@@ -1161,7 +1246,7 @@ function enterAim() {
 // stroke-end behaviour (reset shot events, apply velocity, sfx) stays identical.
 function launchCue(dx, dz, power) {
   striking = false;
-  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+  shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
   const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
   cue.vx = dx * speed;
   cue.vz = dz * speed;
@@ -1484,7 +1569,54 @@ function statsLayout() {
   return balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]);
 }
 
+// 9-ball's stroke resolution. The rules themselves live in js/nineball.js;
+// this just feeds it the stroke and applies the verdict, reusing 8-ball's
+// ball-in-hand, turn-passing and end-screen machinery unchanged.
+function resolveShotNine() {
+  const N = window.PoolNineBall;
+  const me = players[turn];
+  const wasBreak = breakShot; breakShot = false;
+
+  // The target is the lowest ball as it stood BEFORE the stroke — take this
+  // shot's own pots back out, or sinking the target would retarget the
+  // legality check onto the next ball up and read as a wrong-ball foul.
+  const target = N.lowest(id => balls[id].potted && shotEvents.potted.indexOf(id) < 0);
+  const out = N.resolve({
+    potted: shotEvents.potted,
+    scratch: shotEvents.scratch,
+    firstHit: shotEvents.firstHit,
+    cushion: shotEvents.cushion,
+    target,
+  });
+
+  if (window.MatchStats) {
+    window.MatchStats.recordShot(turn, out.credited, out.foulKind, statsLayout());
+  }
+
+  if (out.win) {
+    return endGame(turn, wasBreak
+      ? `${me.cfg.name} sank the 9-ball on the break!`
+      : `${me.cfg.name} sank the 9-ball.`);
+  }
+  // A 9 pocketed on a foul was never really potted — put it straight back.
+  if (out.spotNine) spotBall(9);
+
+  if (out.foul) {
+    turn = 1 - turn;
+    cue.vx = 0; cue.vz = 0;
+    lastFoul = `${N.foulText(out.foulKind, target)} ${players[turn].cfg.name}: ball in hand`;
+    if (myTurn()) { pinToast(lastFoul); enterSurveyCam(); } else toast(lastFoul);
+    state = S.PLACING;
+  } else {
+    if (!out.keepTurn) turn = 1 - turn;
+    enterAim();
+    if (out.keepTurn) toast(isMe(turn) ? 'You shoot again' : `${me.cfg.name} shoots again`);
+  }
+  updateHUD();
+}
+
 function resolveShot() {
+  if (gameMode === '9ball') return resolveShotNine();
   const me = players[turn], opp = players[1 - turn];
   const potted = shotEvents.potted;
   const scratch = shotEvents.scratch;
@@ -1643,11 +1775,44 @@ function forfeit() {
   endGame(1 - loser, `${players[loser].cfg.name} forfeited the match.`);
   if (onlineMode) netSend(serializeState('end'));
 }
-window.PoolMatch = { forfeit };
+// Pick the rule set for the NEXT match ('8ball' | '9ball'), from the home
+// screen's game tabs (js/mode.js). A match already underway keeps its own
+// rules; on the home screen the showcase table re-racks so the player can see
+// which game they picked. The computer opponent (js/bot.js) only knows 8-ball,
+// so choosing 9-ball drops the offline setup back to two players.
+function setGame(id) {
+  if ((id !== '8ball' && id !== '9ball') || id === gameMode) return;
+  gameMode = id;
+  const cBtn = document.getElementById('vsCpuBtn');
+  if (cBtn) {
+    cBtn.disabled = id !== '8ball';
+    cBtn.title = id === '8ball' ? '' : 'The computer only plays 8-ball for now';
+  }
+  if (id !== '8ball' && vsCPU) setVsCPU(false);
+  if (state === S.SETUP) { rackBalls(); updateHUD(); }
+}
+
+window.PoolMatch = { forfeit, setGame, game: () => gameMode };
+
+// Headline the help card with the rules of the game being played, so a player
+// opening 9-ball for the first time doesn't have to guess the win condition.
+const GAME_HELP = {
+  '8ball': ['8-BALL', 'Pot your group, then the 8 in a pocket you call.'],
+  '9ball': ['9-BALL', 'Hit the lowest ball first. Pot the 9 — any time — to win.'],
+};
+function showGameHelp() {
+  const [title, rules] = GAME_HELP[gameMode];
+  const headEl = document.getElementById('helpGameHead');
+  const textEl = document.getElementById('helpGame');
+  if (headEl) headEl.textContent = title;
+  if (textEl) textEl.textContent = rules;
+}
 
 function startMatch() {
   onlineMode = false;          // local match: full control, random rack
-  botMode = vsCPU;             // vs the computer? (set by the OFFLINE setup toggle)
+  // vs the computer? (set by the OFFLINE setup toggle) — 9-ball is hot-seat
+  // only for now, the bot doesn't know rotation rules yet.
+  botMode = vsCPU && gameMode === '8ball';
   mySeat = 0; botSeat = 1;     // the human is seat 0
   clearBotTimer(); botAim = null; botStriking = false;
   rng = Math.random;
@@ -1661,7 +1826,7 @@ function startMatch() {
   else turn = Math.random() < 0.5 ? mySeat : botSeat;
   if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
   rackBalls();
-  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+  shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
   setCalledPocket(-1);
   pinnedMsg = null; // clear any prompt pinned from a previous game
   hidePlaceGhost(); // and any ball-in-hand preview from the last one
@@ -1673,6 +1838,7 @@ function startMatch() {
   document.getElementById('help').classList.remove('hidden');
   if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
+  showGameHelp();
   toast(isMe(turn) ? `You break. Drag back from the cue ball to shoot.`
     : botMode ? `${players[turn].cfg.name} breaks…`
       : `${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
@@ -1918,6 +2084,7 @@ function startOnline(opts) {
   // Guard so a back-to-back online match doesn't stash the previous opponent's.
   if (!onlineMode) offlineNames = [players[0].cfg.name, players[1].cfg.name];
   onlineMode = true;
+  gameMode = '8ball';              // matchmaking is 8-ball only for now
   botMode = false; clearBotTimer(); botAim = null; botStriking = false; // never both at once
   mySeat = opts.mySeat | 0;
   rng = mulberry32(opts.seed >>> 0);
@@ -1929,7 +2096,7 @@ function startOnline(opts) {
   turn = 0;                        // seat 0 = breaker
   if (window.MatchStats) window.MatchStats.begin([players[0].cfg.name, players[1].cfg.name]);
   rackBalls();
-  shotEvents = { potted: [], scratch: false, firstHit: null, eightPocket: -1 };
+  shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
   remoteAim = null; ghostStick.visible = false; watcherStriking = false; snapBuf = [];
   striking = false; stick.visible = false; lastEnd = null; lastAimKey = '';
   setCalledPocket(-1);
@@ -1945,6 +2112,7 @@ function startOnline(opts) {
   document.getElementById('help').classList.remove('hidden');
   if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
+  showGameHelp();
   updateHUD();
 
   // Keep both scenes in sync. Register the background-change hook once (lazily,
@@ -2040,7 +2208,22 @@ function unpinToast() {
   msgTimer = setTimeout(() => msgEl.classList.remove('show'), 2600);
 }
 
+// One ball chip for the HUD's remaining-balls strip: a full-colour disc for
+// 1-8, a white disc with a coloured band for 9-15 (the CSS reads --dc).
+function ballDot(id) {
+  const d = document.createElement('div');
+  const striped = id > 8;
+  const c = BALL_COLORS[striped ? id - 8 : id];
+  d.className = 'dot' + (striped ? ' striped' : '');
+  d.style.background = striped ? '' : c;
+  d.style.setProperty('--dc', c);
+  return d;
+}
+
 function updateHUD() {
+  // 9-ball has no groups: both players share one rotation, so both cards show
+  // the same target and the same balls left on the table.
+  const nineTarget = gameMode === '9ball' ? lowestBall() : 0;
   for (let i = 0; i < 2; i++) {
     const card = document.getElementById('card' + i);
     const p = players[i];
@@ -2055,21 +2238,25 @@ function updateHUD() {
         avEl.textContent = '';
       }
     }
-    card.querySelector('.pgroup').textContent =
-      p.group ? (p.group === 'solid' ? 'Solids' : 'Stripes') : 'No group yet';
     card.classList.toggle('active', i === turn && state !== S.END);
     const dots = card.querySelector('.dots');
     dots.innerHTML = '';
+
+    if (gameMode === '9ball') {
+      card.querySelector('.pgroup').textContent =
+        nineTarget ? `Next: ${nineTarget} ball` : 'Rack clear';
+      for (const id of window.PoolNineBall.OBJECT_BALLS) {
+        if (!balls[id].potted) dots.appendChild(ballDot(id));
+      }
+      continue;
+    }
+
+    card.querySelector('.pgroup').textContent =
+      p.group ? (p.group === 'solid' ? 'Solids' : 'Stripes') : 'No group yet';
     if (p.group) {
       const lo = p.group === 'solid' ? 1 : 9, hi = p.group === 'solid' ? 7 : 15;
       for (let id = lo; id <= hi; id++) {
-        if (balls[id].potted) continue;
-        const d = document.createElement('div');
-        d.className = 'dot' + (p.group === 'stripe' ? ' striped' : '');
-        const c = BALL_COLORS[id > 8 ? id - 8 : id];
-        d.style.background = p.group === 'stripe' ? '' : c;
-        d.style.setProperty('--dc', c);
-        dots.appendChild(d);
+        if (!balls[id].potted) dots.appendChild(ballDot(id));
       }
       if (remaining(p.group) === 0) {
         const d = document.createElement('div');
@@ -2516,10 +2703,12 @@ updateHUD();
 requestAnimationFrame(frame);
 
 /* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break,
-   ?cpu makes seat 2 the computer (vs-CPU mode), ?botbreak lets it break,
-   ?botvbot gives the computer BOTH seats (self-play, for measuring its pot
-   rate), ?dbg exposes a live state dump (#dbg) without auto-firing. */
+   ?game=9ball picks the rule set, ?cpu makes seat 2 the computer (vs-CPU mode),
+   ?botbreak lets it break, ?botvbot gives the computer BOTH seats (self-play,
+   for measuring its pot rate), ?dbg exposes a live state dump (#dbg) without
+   auto-firing. */
 const q = new URLSearchParams(location.search);
+if (q.has('game')) setGame(q.get('game'));
 if (q.has('autostart')) {
   document.getElementById('landingOverlay').classList.add('hidden');
   document.getElementById('modeOverlay').classList.add('hidden');
@@ -2533,9 +2722,24 @@ if (q.has('autostart')) {
     dbg.style.display = 'none';
     document.body.appendChild(dbg);
     if (q.has('autoshot')) setTimeout(() => fire(Math.min(1, parseFloat(q.get('autoshot')) || 0.9)), 500);
+    // Scripted play, for driving whole racks from a test harness: point the cue
+    // at a table position, drop the ball in hand, and shoot. Same entry points
+    // the human's input uses, so it exercises the real resolve path.
+    window.__poolTest = {
+      aimAt(x, z) { cam.yaw = Math.atan2(-(x - cue.x), -(z - cue.z)); },
+      shoot(power) { if (state === S.AIM) fire(Math.max(0.05, Math.min(1, power))); },
+      place(x, z) {
+        if (state !== S.PLACING) return false;
+        cue.x = x; cue.z = z; cue.vx = cue.vz = 0;
+        cue.potted = false; cue.sink = 0; setBallVisual(cue);
+        unpinToast(); enterAim();
+        return true;
+      },
+    };
     setInterval(() => {
       dbg.textContent = JSON.stringify({
-        state, turn,
+        state, turn, game: gameMode,
+        target: gameMode === '9ball' ? lowestBall() : 0,
         moving: anyMoving(),
         potted: balls.filter(b => b.potted).map(b => b.id),
         pos: balls.filter(b => !b.potted).map(b => [b.id, +b.x.toFixed(3), +b.z.toFixed(3)]),
