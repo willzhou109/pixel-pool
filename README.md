@@ -1,14 +1,25 @@
 # Pixel Pool
 
-A browser-based 3D 8-ball pool game with real-time multiplayer and a genuinely
-intelligent computer opponent — built from scratch in vanilla JS + Three.js,
-with a zero-third-party-dependency Node backend.
+A browser-based 3D cue-sports game — 8-ball, 9-ball and snooker — with
+real-time multiplayer and a genuinely intelligent computer opponent, built from
+scratch in vanilla JS + Three.js, with a zero-third-party-dependency Node
+backend.
 
 **Play it live:** https://pixel-pool-production.up.railway.app/
 
 ## Features
 
-- **Full 8-ball physics** — friction, cushion bounces, pocket capture, and
+- **Three rule sets, one engine** — 8-ball, 9-ball rotation, and snooker
+  (fifteen reds and six colours, nominated colours, re-spots, ascending-order
+  endgame and snooker's own foul values). Each is a self-contained rules module
+  over shared physics.
+- **Snooker gets a real snooker table**, not a pool table with different
+  markings. What actually separates the two is how many ball-widths across they
+  are, so the snooker bed is built to the WPBSA standard — 68 ball diameters
+  long by 34 wide, against the pool games' 44 by 22 — with the pockets, cushions,
+  rails and cue all scaled to the ball, and the baulk line, the D and the six
+  spots chalked at their true fractions of the playing area.
+- **Full billiards physics** — friction, cushion bounces, pocket capture, and
   equal-mass ball collisions, simulated frame-by-frame rather than faked.
 - **A computer opponent that plans ahead.** Most pool AIs just aim at the
   easiest pot. This one replays the physics engine to predict where the cue
@@ -26,7 +37,8 @@ with a zero-third-party-dependency Node backend.
 - **Friends, DMs, and game invites** — add friends, message them, and invite
   them into a live match.
 - **Vs-computer offline mode** with adjustable difficulty, alongside local
-  hot-seat 2-player.
+  hot-seat 2-player. (Snooker is hot-seat two-player for now — the computer
+  opponent plays 8-ball and 9-ball.)
 - Cosmetic depth: 7 table styles, 5 background scenes (including a full
   outer-space environment), and pickable avatars.
 

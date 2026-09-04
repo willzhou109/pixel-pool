@@ -99,10 +99,48 @@
   .hudCard .hudAvatar { width: 18px; height: 18px; flex: none; display: none; }
   .hudCard .hudAvatar.avatarEmoji { display: flex; font-size: 11px; }
   .hudCard .pname { font-size: 10px; }
-  .hudCard .pgroup { font-size: 7px; color: var(--text-dim); margin-top: 6px; }
+  .hudCard .pgroup { font-size: 7px; color: var(--text-dim); margin-top: 6px; min-height: 8px; }
+  /* Snooker's frame score — the one number that matters in that game, so it
+     gets the biggest type on the card. Hidden outright in the pool games. */
+  .hudCard .pscore { font-size: 20px; color: var(--accent); margin-top: 8px; letter-spacing: 1px; }
+  /* Fifteen red chips would swamp the card, so the reds collapse to one chip
+     and a count. */
+  .hudCard .redsLeft { display: flex; align-items: center; gap: 3px; }
+  .hudCard .redsLeft span { font-size: 7px; color: var(--text-dim); }
   .hudCard .dots { display: flex; gap: 3px; justify-content: center; margin-top: 7px; min-height: 8px; flex-wrap: wrap; }
   .hudCard .dot { width: 8px; height: 8px; }
   .hudCard .dot.striped { background: linear-gradient(#fff 20%, var(--dc) 20%, var(--dc) 80%, #fff 80%); }
+  /* The 8 is near-black on a near-black panel. A 2px white pip dead centre
+     makes it readable without breaking the flat pixel-art look — sized in whole
+     pixels and drawn as a hard-edged layer so it stays crisp, never blurred. */
+  .hudCard .dot.eight {
+    background: linear-gradient(#fff, #fff) center / 2px 2px no-repeat, var(--dc);
+  }
+  /* Snooker's colour picker: the striker has potted a red and must say which
+     colour they're on before the cue is live again. Sits low and centred, out
+     of the way of the ball strip at the top. */
+  #nominate {
+    position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+    background: var(--panel); border: 3px solid var(--panel-border);
+    box-shadow: 5px 5px 0 rgba(0,0,0,0.5); padding: 12px 14px; z-index: 14;
+    max-width: 92vw;
+  }
+  .nomHead { font-size: 7px; color: var(--text-dim); text-align: center; margin-bottom: 10px; }
+  #nomRow { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .nomBtn {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    background: var(--panel-2, #1b2130); border: 2px solid var(--panel-border);
+    color: var(--text); font-family: var(--px); font-size: 6px;
+    padding: 8px 9px; cursor: pointer;
+  }
+  .nomBtn:hover { border-color: var(--accent); color: var(--accent); }
+  .nomBtn:active { transform: translate(1px, 1px); }
+  .nomBtn .nomBall {
+    width: 16px; height: 16px; border-radius: 50%;
+    box-shadow: inset -2px -2px 0 rgba(0,0,0,0.3), inset 2px 2px 0 rgba(255,255,255,0.3);
+  }
+  .nomBtn b { font-size: 8px; color: var(--accent); }
+
   #turnBadge {
     align-self: center; background: var(--panel); border: 3px solid var(--panel-border);
     padding: 8px 10px; font-size: 7px; color: var(--text-dim); white-space: nowrap;
@@ -110,11 +148,14 @@
 
   #msg {
     position: absolute; top: 92px; left: 50%; transform: translateX(-50%);
+    /* snooker's HUD cards carry a score line, so they run ~46px taller than the
+       pool ones — see body.snookerHud below, which drops the toast clear. */
     background: var(--panel); border: 3px solid var(--panel-border);
     padding: 10px 16px; font-size: 8px; line-height: 1.8; z-index: 10; pointer-events: none;
     opacity: 0; transition: opacity 0.3s; max-width: 90%; text-align: center;
   }
   #msg.show { opacity: 1; }
+  body.snookerHud #msg { top: 140px; }
 
   /* Pocket notifications — upper-right feed (nudged down and in from the
      corner). New toasts append to the bottom so the stack grows downward, and
@@ -428,6 +469,8 @@
   .gameTab:active { transform: translate(1px, 1px); }
   .gameTab.sel { border-color: var(--accent); color: var(--accent); box-shadow: 4px 4px 0 rgba(0,0,0,0.5); }
   .gameTab.soon { opacity: 0.65; }
+  /* A setup toggle the current game can't offer (VS COMPUTER in snooker). */
+  .oppTab.locked { opacity: 0.35; pointer-events: none; }
 
   #playModes { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 30px; }
   .playMode {
@@ -662,6 +705,23 @@
   .histRes.loss { color: #e74c3c; }
   .histEmpty { color: var(--text-dim); font-size: calc(8px * var(--home-scale)); line-height: 1.9; }
   #histReason { color: var(--text-dim); font-size: calc(8px * var(--home-scale)); line-height: 1.9; margin: 2px 0 12px; }
+  /* AI-written recap of the match (server/commentary/). Sentence case and a
+     left accent bar so it reads as prose, not another stat row. */
+  #histCommentary {
+    border-left: 3px solid var(--accent); background: rgba(0, 0, 0, 0.28);
+    padding: 10px 12px; margin: 0 0 14px;
+    font-size: calc(7px * var(--home-scale)); line-height: 2.1; color: var(--text);
+  }
+  #histCommentary .cmTag { display: block; color: var(--accent); margin-bottom: 6px; letter-spacing: 1px; }
+  #histCommentary.cmWaiting { border-left-color: var(--panel-border); color: var(--text-dim); }
+  /* Same block on the end-of-game recap panel (both offline and online). */
+  #recapCommentary {
+    border-left: 3px solid var(--accent); background: rgba(0, 0, 0, 0.28);
+    padding: 10px 12px; margin: 14px 0 4px; text-align: left;
+    font-size: 8px; line-height: 2.1; color: var(--text);
+  }
+  #recapCommentary .cmTag { display: block; color: var(--accent); margin-bottom: 6px; letter-spacing: 1px; }
+  #recapCommentary.cmWaiting { border-left-color: var(--panel-border); color: var(--text-dim); }
   #histTabs { display: flex; gap: 8px; margin-top: 4px; }
   #historyBackBtn { margin-top: 16px; }
   /* The STATS/LAYOUT panes are shared with the end-of-game recap (.statTable,
@@ -801,13 +861,20 @@
 <canvas id="c"></canvas>
 
 <div id="hud" class="hidden">
-  <div class="hudCard" id="card0"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pgroup"></div><div class="dots"></div></div>
+  <div class="hudCard" id="card0"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pscore hidden"></div><div class="pgroup"></div><div class="dots"></div></div>
   <div id="turnBadge"></div>
-  <div class="hudCard" id="card1"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pgroup"></div><div class="dots"></div></div>
+  <div class="hudCard" id="card1"><div class="hudTop"><div class="hudAvatar"></div><div class="pname"></div></div><div class="pscore hidden"></div><div class="pgroup"></div><div class="dots"></div></div>
 </div>
 
 <div id="msg"></div>
 <div id="potFeed"></div>
+
+<!-- Snooker: pick the colour you're on after potting a red. Filled in by
+     game.js from js/snooker.js so the swatches match the balls. -->
+<div id="nominate" class="hidden">
+  <div class="nomHead">NOMINATE A COLOUR</div>
+  <div id="nomRow"></div>
+</div>
 
 <div id="powerWrap"><div id="powerLabel">POWER</div><div id="powerBar"><div id="powerFill"></div></div></div>
 
@@ -892,7 +959,7 @@
         <button class="gameTab sel" data-game="8ball">8-BALL</button>
         <button class="gameTab" data-game="9ball">9-BALL</button>
         <button class="gameTab soon" data-game="10ball">10-BALL</button>
-        <button class="gameTab soon" data-game="snooker">SNOOKER</button>
+        <button class="gameTab" data-game="snooker">SNOOKER</button>
       </div>
 
       <div id="playModes">
@@ -966,6 +1033,7 @@
         <div id="historyDetail" class="hidden">
           <div class="histRow" id="histDetailRow"></div>
           <div id="histReason"></div>
+          <div id="histCommentary" class="hidden"></div>
           <div id="histTabs">
             <button class="recapTab recapTabOn" id="histTabStats">STATS</button>
             <button class="recapTab" id="histTabLayout">LAYOUT</button>
@@ -1147,6 +1215,7 @@
       <button class="recapTab recapTabOn" id="recapTabStats">STATS</button>
       <button class="recapTab" id="recapTabLayout">LAYOUT</button>
     </div>
+    <div id="recapCommentary" class="hidden"></div>
     <div id="recapTable" class="statTable"></div>
     <div id="recapLayout" class="pbpList hidden"></div>
     <button class="bigBtn ghostBtn" id="recapBackBtn">BACK</button>
@@ -1178,7 +1247,9 @@
 <script src="js/bottalk.js"></script>
 <script src="js/bot.js"></script>
 <script src="js/chat.js"></script>
+<script src="js/physics.js"></script>
 <script src="js/nineball.js"></script>
+<script src="js/snooker.js"></script>
 <script src="js/game.js"></script>
 <script src="js/online.js"></script>
 <script src="js/backgrounds.js"></script>

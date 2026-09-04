@@ -33,8 +33,22 @@ db.exec(`
   )
 `);
 
+// AI match recap (added after the table above shipped) — same probe-then-ALTER
+// migration as users.google_id in db.js, so this is safe against both a fresh
+// database and one already carrying rows in production.
+//   commentary_status: 'pending' | 'ready' | 'failed' | 'skipped'
+// Generated asynchronously by server/commentary/ — see queueForMatch().
+const matchCols = db.prepare('PRAGMA table_info(matches)').all();
+if (!matchCols.some(c => c.name === 'commentary')) {
+  db.exec('ALTER TABLE matches ADD COLUMN commentary TEXT');
+  db.exec("ALTER TABLE matches ADD COLUMN commentary_status TEXT");
+}
+
 const insertMatch = db.prepare(
   'INSERT INTO matches (p0, p1, winner, reason, duration, stats) VALUES (?, ?, ?, ?, ?, ?)'
+);
+const updateCommentary = db.prepare(
+  'UPDATE matches SET commentary = ?, commentary_status = ? WHERE id = ?'
 );
 const selectForUser = db.prepare(
   `SELECT id, p0, p1, winner, reason, played_at FROM matches
@@ -42,7 +56,9 @@ const selectForUser = db.prepare(
    ORDER BY id DESC LIMIT 100`
 );
 const selectById = db.prepare(
-  'SELECT id, p0, p1, winner, reason, duration, stats, played_at FROM matches WHERE id = ?'
+  `SELECT id, p0, p1, winner, reason, duration, stats, played_at,
+          commentary, commentary_status
+   FROM matches WHERE id = ?`
 );
 
 // The stats snapshot includes the play-by-play log (two full ball layouts per
@@ -50,16 +66,46 @@ const selectById = db.prepare(
 // the DB. Over the cap the per-seat tallies are kept and just the log dropped.
 const MAX_STATS_BYTES = 400_000;
 
-/** Store a finished match. names = [seat0Username, seat1Username]. */
+/** Store a finished match. names = [seat0Username, seat1Username].
+ * Returns the new match id (or null if the game wasn't decisive), so callers
+ * can queue follow-up work — see realtime.js scheduling the AI recap. */
 function recordMatch(names, winner, reason, durationSec, stats) {
-  if (winner !== 0 && winner !== 1) return;
+  if (winner !== 0 && winner !== 1) return null;
   let statsJson = null;
   if (stats && Array.isArray(stats.seats)) {
     statsJson = JSON.stringify(stats);
     if (statsJson.length > MAX_STATS_BYTES) statsJson = JSON.stringify({ seats: stats.seats });
   }
-  insertMatch.run(names[0], names[1], winner,
+  const info = insertMatch.run(names[0], names[1], winner,
     String(reason || '').slice(0, 300), Math.max(0, durationSec | 0), statsJson);
+  return Number(info.lastInsertRowid);
+}
+
+/* ------------------------------- commentary ------------------------------- */
+// Read/write helpers for the async recap (server/commentary/). Kept here so
+// history.js stays the only module that touches the matches table.
+
+/** The row a commentary job needs, shaped like detailFor's body (no seat
+ * perspective — the recap is written about the game, not for one player). */
+function forCommentary(id) {
+  const row = selectById.get(id);
+  if (!row) return null;
+  let stats = null;
+  try { stats = row.stats ? JSON.parse(row.stats) : null; } catch { /* corrupt row */ }
+  return {
+    id: row.id,
+    names: [row.p0, row.p1],
+    winner: row.winner,
+    reason: row.reason,
+    duration: row.duration,
+    stats,
+    commentaryStatus: row.commentary_status,
+  };
+}
+
+/** Store a generated recap (or mark the attempt failed/skipped). */
+function setCommentary(id, text, status) {
+  updateCommentary.run(text || null, status, id);
 }
 
 /* ------------------------------ API handlers ------------------------------ */
@@ -111,6 +157,8 @@ function detailFor(username, id) {
       duration: row.duration,
       playedAt: row.played_at,
       stats,
+      commentary: row.commentary || null,
+      commentaryStatus: row.commentary_status || null,
     },
   };
 }
@@ -123,4 +171,7 @@ function matchDetail(token, id) {
   return detailFor(username, id);
 }
 
-module.exports = { recordMatch, history, matchDetail, listFor, detailFor };
+module.exports = {
+  recordMatch, history, matchDetail, listFor, detailFor,
+  forCommentary, setCommentary,
+};

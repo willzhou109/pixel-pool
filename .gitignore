@@ -1,3 +1,20 @@
 node_modules/
 .DS_Store
 .Rhistory
+
+# Local secrets (API keys, signing secret). NEVER commit these.
+# .env.example is the committed, value-free template.
+.env
+.env.*
+!.env.example
+
+# Python training environment (tools/train_pot.py). Recreate with:
+#   python3 -m venv .venv && .venv/bin/pip install tensorflow numpy
+.venv/
+
+# Generated ML data. Regenerate with tools/record-shots.js, tools/dump-config.js
+# and tools/gen-pot-samples.js — all deterministic given their --seed.
+# The trained weights (js/potmodel.json) DO ship to the browser and are committed.
+data/*.jsonl
+data/shots-*.json
+data/potmodel-check.json

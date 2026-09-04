@@ -114,6 +114,10 @@
     // not wherever the recap was left showing last game.
     if (endPanel) endPanel.classList.remove('hidden');
     if (recapPanel) recapPanel.classList.add('hidden');
+    // Drop the previous game's recap so it can't be mistaken for this one's.
+    recapRequested = false;
+    recapToken++;
+    showCommentary(null);
   }
 
   function fmtDur(sec) {
@@ -168,6 +172,78 @@
     }
   }
 
+  /* ----------------------------- AI recap -------------------------------- */
+  // Offline games (hot-seat, vs-computer) never reach the server, so there's no
+  // stored match to hang a recap off — POST the snapshot to /api/commentary and
+  // render what comes back. Online games get the same treatment here; their
+  // persistent copy is generated separately (server/commentary/index.js) and
+  // shows up in the profile's GAME HISTORY.
+  //
+  // Guests get recaps too (offline play needs no account); the server just
+  // gives them a smaller hourly allowance. See server/commentary/live.js.
+  const commentaryEl = $('recapCommentary');
+  let recapToken = 0;       // pins a response to the game that asked for it
+  let recapRequested = false; // one generation per finished game
+
+  // Full layouts are far too big to POST. Diff each stroke down to the ball
+  // ids that dropped — the shape server/commentary/summarize.js accepts.
+  function compactLog() {
+    return log.map(e => {
+      const wasPotted = new Map();
+      for (const row of (e.before || [])) wasPotted.set(row[0], !!row[3]);
+      const potted = [];
+      for (const row of (e.after || [])) {
+        if (row[3] && wasPotted.get(row[0]) === false) potted.push(row[0]);
+      }
+      return { shooter: e.shooter, foul: e.foul, potted };
+    });
+  }
+
+  function showCommentary(text, waiting) {
+    if (!commentaryEl) return;
+    if (!text) { commentaryEl.classList.add('hidden'); return; }
+    commentaryEl.classList.remove('hidden');
+    commentaryEl.classList.toggle('cmWaiting', !!waiting);
+    commentaryEl.innerHTML = '';
+    const tag = document.createElement('span');
+    tag.className = 'cmTag';
+    tag.textContent = 'MATCH RECAP';
+    commentaryEl.appendChild(tag);
+    commentaryEl.appendChild(document.createTextNode(text));
+  }
+
+  async function requestCommentary() {
+    if (!commentaryEl || !result) return;
+    // Signed in? Send the token so the player gets the higher allowance.
+    // Signed out is fine — the server treats it as a guest, not an error.
+    const token = (() => { try { return sessionStorage.getItem('pp_token'); } catch { return null; } })();
+    const mine = ++recapToken;
+    showCommentary('Writing the recap…', true);
+    try {
+      const res = await fetch('/api/commentary', {
+        method: 'POST',
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          token ? { Authorization: `Bearer ${token}` } : {}),
+        body: JSON.stringify({
+          // The rule set decides how the shot list reads (in 9-ball the 9 is
+          // the ball that wins), so the recap has to be told which was played.
+          game: window.PoolMatch ? window.PoolMatch.game() : '8ball',
+          names, winner: result.winner, reason: result.reason,
+          duration: result.seconds,
+          stats: { seats, log: compactLog() },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (mine !== recapToken) return;              // a newer game superseded this
+      // Any failure (not configured, rate limited, API down) just hides the
+      // block — the recap is a bonus, never something to apologise for.
+      showCommentary(res.ok ? data.commentary : null);
+    } catch {
+      if (mine === recapToken) showCommentary(null);
+    }
+  }
+
   function render() {
     const winnerEl = $('recapWinner'), reasonEl = $('recapReason'),
           tableEl = $('recapTable'), durEl = $('recapDuration');
@@ -188,6 +264,8 @@
   if (recapBtn && endPanel && recapPanel) {
     recapBtn.addEventListener('click', () => {
       render();
+      // Ask once per game — reopening the recap shouldn't pay for it again.
+      if (!recapRequested) { recapRequested = true; requestCommentary(); }
       endPanel.classList.add('hidden');
       recapPanel.classList.remove('hidden');
     });

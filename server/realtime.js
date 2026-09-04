@@ -20,6 +20,7 @@ const { areFriends } = require('./friends');
 const presence = require('./presence');
 const social = require('./social');
 const invites = require('./invites');
+const commentary = require('./commentary');
 
 // Live match bookkeeping for history recording, keyed by room:
 // { names: [seat0Username, seat1Username], startMs, recorded }.
@@ -183,9 +184,13 @@ function recordEnd(io, room, msg) {
   if (msg.winner !== 0 && msg.winner !== 1) return; // only decisive games count
   m.recorded = true;
   try {
-    recordMatch(m.names, msg.winner, msg.reason,
+    const matchId = recordMatch(m.names, msg.winner, msg.reason,
       Math.round((Date.now() - m.startMs) / 1000), msg.stats);
     console.log(`[rt] recorded: ${m.names[0]} vs ${m.names[1]} — seat ${msg.winner} won`);
+    // Queue the AI recap. Returns immediately — generation happens in the
+    // background and lands in matches.commentary; the players' end screen is
+    // never held up waiting on it.
+    commentary.queueForMatch(matchId);
   } catch (e) {
     console.error('[rt] failed to record match:', e);
   }

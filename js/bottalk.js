@@ -26,7 +26,10 @@
     'left middle pocket', 'right middle pocket',
   ];
   const pocketName = i => POCKET_NAMES[i] || 'pocket';
-  const ballName = id => (id === 8 ? 'the 8-ball' : 'the ' + id);
+  // Only the ball that ENDS the game gets its full name ("the 8-ball") — which
+  // one that is depends on the rules being played, since 9-ball demotes the 8 to
+  // an ordinary numbered ball. Defaults to 8-ball.
+  const ballName = (id, gameBall) => (id === (gameBall || 8) ? 'the ' + id + '-ball' : 'the ' + id);
 
   /* ----------------------------- line picking ---------------------------- */
   // Remember the last line used per category so the same one never lands twice
@@ -39,23 +42,27 @@
     lastUsed[key] = lines[i];
     return lines[i];
   }
-  // Templates can open with {ball} ("the 5 is going in…"), so tidy the sentence
-  // case after substituting rather than writing two variants of every line.
-  const fill = (s, ball, pocket) => {
-    const out = s.replace(/{ball}/g, ball).replace(/{pocket}/g, pocket);
-    return out.charAt(0).toUpperCase() + out.slice(1);
-  };
+  // Ball and pocket names are lowercase ("the 5", "far-left corner"), but a slot
+  // can sit at the start of a sentence — either the line's own opening or one
+  // mid-template ("…thanks. {ball} into the {pocket}."). Capitalising after
+  // substitution beats writing two variants of every template.
+  const fill = (s, ball, pocket) => s
+    .replace(/{ball}/g, ball).replace(/{pocket}/g, pocket)
+    .replace(/(^|[.!?]\s+)([a-z])/g, (_, lead, c) => lead + c.toUpperCase());
 
   /* -------------------------------- intent ------------------------------- */
   /* What the computer is about to attempt.
      d: the bot decision.
-     opts: { breakShot, onEight, ballInHand, forcedCall }.
+     opts: { game, breakShot, onEight, ballInHand, forcedCall }.
+     game is '8ball' | '9ball', which decides both how balls are named and which
+     shot is the one for the match.
      forcedCall is a pocket index it had to nominate on the 8 without actually
      shooting at it (snookered) — worth saying out loud, since the gold marker
-     appears on a pocket the shot isn't heading for. */
+     appears on a pocket the shot isn't heading for. 9-ball never calls. */
   function intent(d, opts) {
     const o = opts || {};
-    const ball = d && d.target != null ? ballName(d.target) : 'that one';
+    const gameBall = o.game === '9ball' ? 9 : 8;
+    const ball = d && d.target != null ? ballName(d.target, gameBall) : 'that one';
     const pocket = d && d.pocket != null ? pocketName(d.pocket) : 'a pocket';
     const forced = o.forcedCall != null && o.forcedCall >= 0
       ? ' Have to call one anyway, so — ' + pocketName(o.forcedCall) + '. Optimistic, I know.'
@@ -97,8 +104,14 @@
       ]), ball, pocket);
     }
 
-    if (o.onEight || (d && d.target === 8)) {
-      return fill(pick('eight', [
+    // The shot for the match. In 9-ball that's the 9 — with no pocket to call,
+    // and reached by clearing up to it rather than by clearing a suit.
+    if (o.onEight || (d && d.target === gameBall)) {
+      return fill(pick('gameball', gameBall === 9 ? [
+        'This is for the match — {ball}, any pocket. {pocket} will do nicely.',
+        'Last one. {ball} in the {pocket} and we\'re done here.',
+        '{ball} to win it. Been a pleasure racking up against you.',
+      ] : [
         'This is for the match — {ball} into the {pocket}.',
         '{ball}, {pocket}. It\'s been a pleasure.',
         'Calling {ball} in the {pocket}. Don\'t watch if you\'re squeamish.',
@@ -124,7 +137,7 @@
 
   /* ------------------------------- reaction ------------------------------ */
   /* A short line once the balls stop. `r` is { potted, foul, scratch, won,
-     lost }. Routine outcomes stay quiet most of the time — a running
+     lost, spotNine }. Routine outcomes stay quiet most of the time — a running
      commentary that never shuts up stops being funny about four shots in. */
   function reaction(r) {
     if (!r) return null;
@@ -137,6 +150,13 @@
       return pick('lost', ['...that was the wrong ball, wasn\'t it. Well played.',
         'Oh, that\'s embarrassing. Your game.',
         'I had that. I genuinely had that. Congratulations.']);
+    }
+    // 9-ball: sank the money ball, but fouled doing it, so it goes straight back
+    // up. Too good a moment to let the generic foul line cover it.
+    if (r.spotNine) {
+      return pick('spotnine', ['Won the game! ...on a foul. It\'s going back up, isn\'t it.',
+        'The 9 drops and it doesn\'t count. I\'d like to lodge a complaint.',
+        'Sank the 9 the illegal way. Spot it back and pretend you saw nothing.']);
     }
     if (r.scratch) {
       return pick('scratch', ['Straight in the pocket. The CUE ball. Marvellous.',

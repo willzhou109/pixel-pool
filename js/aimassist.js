@@ -14,9 +14,14 @@
 
 const hooks = window.PoolAimHooks;
 if (!hooks) { console.warn('AimAssist: PoolAimHooks missing'); return; }
-const { POCKETS, R, LIMZ, SIDE_GAP, balls } = hooks;
-// Table descriptor for js/banks.js's reachable() — the side-pocket aperture test.
-const TABLE = { POCKETS, R, LIMZ, SIDE_GAP };
+// POCKETS and balls are arrays game.js rewrites in place, so holding them is
+// safe. The scalars are NOT captured: snooker plays a smaller ball on its own
+// bed (TABLE_PROFILES in game.js), so R / LIMZ / SIDE_GAP change with the game
+// and a value read at load would go stale the moment someone picks snooker.
+const { POCKETS, balls } = hooks;
+// Table descriptor for js/banks.js's reachable() — the side-pocket aperture
+// test. Rebuilt per call for the same reason.
+const table = () => ({ POCKETS, R: hooks.R, LIMZ: hooks.LIMZ, SIDE_GAP: hooks.SIDE_GAP });
 
 const settings = { lines: true, pockets: true }; // default: both aids on
 
@@ -36,7 +41,7 @@ function hideGlow() { lightPocket(-1); }
 
 /* Is the path from the object ball to a pocket blocked by another ball? */
 function pathBlocked(obj, dx, dz, dist) {
-  const DD = (2 * R) * (2 * R);
+  const DD = (2 * hooks.R) * (2 * hooks.R);
   for (const o of balls) {
     if (o === obj || o.id === 0 || o.potted) continue;
     const mx = o.x - obj.x, mz = o.z - obj.z;
@@ -72,7 +77,7 @@ function predictPocket(hit, gx, gz) {
     // (js/banks.js reachable()). Without this a shallow line lights a side
     // pocket green on a shot the jaw would actually turn away.
     const PB = window.PoolBanks;
-    if (PB && !PB.reachable(TABLE, b, { x: dx, z: dz }, i)) continue;
+    if (PB && !PB.reachable(table(), b, { x: dx, z: dz }, i)) continue;
     if (pathBlocked(b, dx, dz, proj)) continue;    // another ball is in the way
     if (perp < bestPerp) { bestPerp = perp; best = i; }
   }

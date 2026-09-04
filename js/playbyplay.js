@@ -15,12 +15,14 @@
 
   const $ = id => document.getElementById(id);
 
-  // Table geometry + ball palette, mirrored from game.js's CONFIG block —
-  // keep in sync if the table ever changes shape.
-  const PW = 1.27, PH = 0.635, R = 0.0286;
-  const POCKETS = [
-    [-PW, -PH], [PW, -PH], [-PW, PH], [PW, PH], [0, -PH], [0, PH],
-  ];
+  // Table geometry + ball palette, mirrored from game.js's TABLE_PROFILES —
+  // keep in sync if either bed ever changes shape. Snooker plays a smaller ball
+  // on a slightly narrower field, and a board drawn on pool proportions would
+  // put every ball in the wrong place, so each stroke's layout picks its own.
+  const BEDS = {
+    pool: { PW: 1.27, PH: 0.635, R: 0.0286 },
+    snooker: { PW: 1.27, PH: 1.27 * (1778 / 3569), R: 1.27 * (52.5 / 3569) },
+  };
   const BALL_COLORS = {
     1: '#f2b705', 2: '#1d5fbf', 3: '#d0342c', 4: '#6a2d9c',
     5: '#e8720c', 6: '#1a8a4f', 7: '#8a2033', 8: '#181820',
@@ -28,8 +30,17 @@
 
   const FOUL_LABEL = {
     scratch: 'SCRATCH', noContact: 'FOUL: NO CONTACT', wrongBall: 'FOUL: WRONG BALL FIRST',
-    noRail: 'FOUL: NO RAIL',   // 9-ball only
+    noRail: 'FOUL: NO RAIL',       // 9-ball only
+    wrongPot: 'FOUL: POTTED A BALL THAT WASN’T ON', // snooker only
   };
+
+  // A snooker frame is the only game whose layouts carry ball ids above 15 (the
+  // six colours), so the board can tell which palette to draw from the log
+  // itself rather than being told the rule set.
+  const SNK = () => window.PoolSnooker;
+  function isSnookerLayout(layout) {
+    return !!SNK() && layout.some(row => row[0] > 15);
+  }
 
   /* ------------------------------ board draw ------------------------------ */
 
@@ -38,6 +49,8 @@
 
   function drawBoard(cv, layout, dir) {
     const ctx = cv.getContext('2d');
+    const snooker = !!layout && isSnookerLayout(layout);
+    const { PW, PH, R } = BEDS[snooker ? 'snooker' : 'pool'];
     const s = (BW - 2 * PAD) / (2 * PW); // world units -> px (same for both axes)
     const px = x => PAD + (x + PW) * s;
     const py = z => PAD + (z + PH) * s;
@@ -50,14 +63,14 @@
 
     // pockets
     ctx.fillStyle = '#0a0c10';
-    for (const [x, z] of POCKETS) {
+    for (const [x, z] of [[-PW, -PH], [PW, -PH], [-PW, PH], [PW, PH], [0, -PH], [0, PH]]) {
       ctx.beginPath();
       ctx.arc(px(x), py(z), 9, 0, Math.PI * 2);
       ctx.fill();
     }
 
     if (!layout) return;
-    const r = Math.max(5, R * s);
+    const r = Math.max(4, R * s);
     let cuePos = null;
 
     for (const [id, x, z, potted] of layout) {
@@ -66,7 +79,15 @@
       if (id === 0) cuePos = [cx, cy];
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      if (id === 0) {
+      if (snooker && id !== 0) {
+        // Snooker balls are plain colours. The black gets a light outline so it
+        // doesn't vanish into the dark board the way the 8 would.
+        ctx.fillStyle = SNK().hex(id);
+        ctx.fill();
+        if (id === SNK().BLACK) {
+          ctx.lineWidth = 1.5; ctx.strokeStyle = '#cfd6e4'; ctx.stroke();
+        }
+      } else if (id === 0) {
         ctx.fillStyle = '#f4f1e8';
         ctx.fill();
       } else if (id === 8) {

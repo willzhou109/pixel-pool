@@ -26,6 +26,7 @@
   const reasonEl = $('histReason');
   const tabStats = $('histTabStats'), tabLayout = $('histTabLayout');
   const statsEl = $('histStats'), layoutEl = $('histLayout');
+  const commentaryEl = $('histCommentary');
   const backBtn = $('historyBackBtn');
   if (!view || !listEl || !detailEl) { console.warn('History: elements missing'); return; }
 
@@ -34,6 +35,9 @@
 
   let current = null;  // the match detail currently shown, for the LAYOUT tab
   let viewUser = null; // whose history this is: null = me, else another player
+  // Bumped whenever the visible match changes, so a queued commentary re-poll
+  // for a match the player has already navigated away from is dropped.
+  let detailToken = 0;
 
   function fmtDate(playedAt) {
     if (!playedAt) return '—';
@@ -70,6 +74,7 @@
   // username to show another player's. Either way the rows drill into the recap
   // (own games via /api/match/:id, another player's via /api/users/:u/match/:id).
   async function open(username) {
+    detailToken++; // stop any in-flight commentary poll from a previous view
     viewUser = username || null;
     view.classList.remove('hidden');
     detailEl.classList.add('hidden');
@@ -102,24 +107,70 @@
   }
 
   function hide() {
+    detailToken++; // stop any in-flight commentary poll
     view.classList.add('hidden');
   }
 
   /* -------------------------------- detail -------------------------------- */
 
-  async function openDetail(id) {
+  /* ------------------------------ AI recap -------------------------------- */
+  // The recap is generated in the background after a match ends (see
+  // server/commentary/), so a game opened moments later may still be
+  // 'pending'. Show a placeholder and re-poll a few times with a widening
+  // gap, then give up quietly — the text will simply be there next visit.
+  const POLL_DELAYS = [2000, 4000, 8000, 15000];
+
+  function pathFor(id) {
     // Own match via /api/match/:id; another player's via the profile-scoped
     // endpoint, which shows the detail from THAT player's seat perspective.
-    const path = viewUser
+    return viewUser
       ? '/api/users/' + encodeURIComponent(viewUser) + '/match/' + id
       : '/api/match/' + id;
+  }
+
+  function renderCommentary(match) {
+    if (!commentaryEl) return;
+    const status = match.commentaryStatus;
+    // 'failed'/'skipped'/absent: show nothing at all rather than an error the
+    // player can't act on.
+    if (!status || status === 'failed' || status === 'skipped') {
+      commentaryEl.classList.add('hidden');
+      return;
+    }
+    commentaryEl.classList.remove('hidden');
+    commentaryEl.classList.toggle('cmWaiting', status !== 'ready');
+    commentaryEl.innerHTML = '';
+    commentaryEl.appendChild(el('span', 'cmTag', 'MATCH RECAP'));
+    commentaryEl.appendChild(document.createTextNode(
+      status === 'ready' ? (match.commentary || '') : 'Writing the recap…'));
+  }
+
+  // Re-fetch while the recap is still generating. `token` pins this loop to
+  // the match that started it.
+  async function pollCommentary(id, token, attempt) {
+    if (attempt >= POLL_DELAYS.length) return;
+    await new Promise(r => setTimeout(r, POLL_DELAYS[attempt]));
+    if (token !== detailToken) return; // player moved on
+    let match;
+    try { match = await fetchJson(pathFor(id)); } catch { return; }
+    if (token !== detailToken) return;
+    current = match;
+    renderCommentary(match);
+    if (match.commentaryStatus === 'pending') pollCommentary(id, token, attempt + 1);
+  }
+
+  async function openDetail(id) {
+    const token = ++detailToken;
     let match;
     try {
-      match = await fetchJson(path);
+      match = await fetchJson(pathFor(id));
     } catch (e) {
       return; // row stays; nothing to show
     }
+    if (token !== detailToken) return; // a newer row was clicked mid-fetch
     current = match;
+    renderCommentary(match);
+    if (match.commentaryStatus === 'pending') pollCommentary(id, token, 0);
     const opponent = match.names[1 - match.mySeat];
     fillRow(detailRow, fmtDate(match.playedAt), opponent, match.winner === match.mySeat);
     reasonEl.textContent = (match.reason || '') +
@@ -147,6 +198,7 @@
   }
 
   function backToList() {
+    detailToken++; // stop any in-flight commentary poll
     detailEl.classList.add('hidden');
     listEl.classList.remove('hidden');
   }

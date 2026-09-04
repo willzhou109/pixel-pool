@@ -14,10 +14,13 @@
 
   // Round ball chip, mirroring the HUD's solid/striped dot styling but rendered
   // as an actual ball with its number. id 0 = cue ball (no number, ivory).
-  function ballChip(id, color) {
+  // `label` marks a named ball (snooker's reds and colours): those carry no
+  // number and no stripe, so the chip is a plain coloured disc.
+  function ballChip(id, color, label) {
     const el = document.createElement('div');
     el.className = 'pball';
     if (id === 0) { el.classList.add('cue'); return el; }
+    if (label) { el.style.background = color; return el; }
     if (id > 8) el.classList.add('striped'); // stripe: white ball, colour band
     else el.style.background = color;         // solid (and the 8): full colour
     el.style.setProperty('--bc', color);
@@ -28,14 +31,15 @@
   }
 
   // name: shooter's display name. id: ball id (0 = cue). color: css colour for
-  // the chip (ignored for the cue ball).
-  function pocket(name, id, color) {
+  // the chip (ignored for the cue ball). label: what to call the ball, for
+  // games whose balls have names rather than numbers ("black", "red").
+  function pocket(name, id, color, label) {
     const host = container();
     if (!host) return;
 
     const card = document.createElement('div');
     card.className = 'potToast';
-    card.appendChild(ballChip(id, color));
+    card.appendChild(ballChip(id, color, label));
 
     const text = document.createElement('div');
     text.className = 'potText';
@@ -43,7 +47,8 @@
     who.className = 'who';
     who.textContent = name;
     text.appendChild(who);
-    text.append(` pocketed the ${id === 0 ? 'cue' : id} ball`);
+    text.append(label ? ` pocketed the ${label}`
+      : ` pocketed the ${id === 0 ? 'cue' : id} ball`);
     card.appendChild(text);
 
     host.appendChild(card);

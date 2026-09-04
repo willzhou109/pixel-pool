@@ -19,7 +19,12 @@
  * chooseShot(ctx) -> { yaw, sigma, power, pocket?, place?, safe?, via?, target? }
  *   ctx: { R, PW, PH, LIMX, LIMZ, CORNER_GAP, SIDE_GAP, REST, GRIP, POCKETS,
  *          cue:{x,z}, balls:[{id,x,z}], group:'solid'|'stripe'|null,
- *          onEight:bool, phase:'aim'|'place', breakShot:bool }
+ *          onEight:bool, lowestId:number|null, phase:'aim'|'place',
+ *          breakShot:bool }
+ *   lowestId: set ONLY in 9-ball, to the lowest ball still on the table — the one
+ *          ball the cue must strike first. Its presence is what switches the
+ *          rules hooks (legal targets, lookahead, the called-pocket rule) from
+ *          8-ball's suits to rotation; every other decision is rule-agnostic.
  *   via:    'bank' | 'kick' when the shot goes via a cushion (game.js picks the
  *           matching aim-tuning oracle); absent for a direct shot.
  *   target: id of the ball the shot is meant to strike — on every shot type,
@@ -102,9 +107,17 @@
     return false;
   }
 
+  /* Is this shot for the match? The 8 in 8-ball, the 9 in 9-ball. Nothing to
+     play position FOR on a game ball, and it's always worth attempting however
+     hard it is, so the shot picker treats both the same way. */
+  function onGameBall(ctx) {
+    return ctx.lowestId != null ? ctx.lowestId === 9 : !!ctx.onEight;
+  }
+
   // Which balls the bot may legally strike first.
   function legalTargets(ctx) {
-    const { balls, group, onEight } = ctx;
+    const { balls, group, onEight, lowestId } = ctx;
+    if (lowestId != null) return balls.filter(b => b.id === lowestId); // 9-ball: lowest only
     if (onEight) return balls.filter(b => b.id === 8);
     if (!group) return balls.filter(b => b.id !== 8);           // open table
     const solid = group === 'solid';
@@ -160,10 +173,17 @@
     return h;
   }
 
-  /* Which balls the bot would be shooting at NEXT if `potId` drops: its own
-     group minus that ball, or the 8 once the group is cleared. On an open
-     table the pot itself decides the group, so the ball's own suit is used. */
+  /* Which balls the bot would be shooting at NEXT if `potId` drops. 8-ball: its
+     own group minus that ball, or the 8 once the group is cleared — and on an
+     open table the pot itself decides the group, so the ball's own suit is used.
+     9-ball: whatever the lowest ball becomes, which is the whole point of
+     playing shape in rotation. */
   function nextTargets(ctx, restBalls, potId) {
+    if (ctx.lowestId != null) {                          // 9-ball: always the new lowest
+      if (!restBalls.length) return [];
+      const min = Math.min(...restBalls.map(b => b.id));
+      return restBalls.filter(b => b.id === min);
+    }
     const solid = ctx.group ? ctx.group === 'solid' : potId < 8;
     const mine = restBalls.filter(b => b.id !== 8 && (solid ? b.id < 8 : b.id > 8));
     return mine.length ? mine : restBalls.filter(b => b.id === 8);
@@ -213,9 +233,9 @@
     const cands = potCandidates(ctx, cuePos, ctx.balls, legalTargets(ctx));
     if (!cands.length) return null;
     cands.sort((a, b) => a.hardness - b.hardness);
-    // Nothing to play position FOR when the 8 ends the game — and without the
+    // Nothing to play position FOR when the shot ends the game — and without the
     // roll-out module this degrades to the old "just take the easiest pot".
-    if (ctx.onEight || !window.PoolPos) return cands[0];
+    if (onGameBall(ctx) || !window.PoolPos) return cands[0];
 
     let best = null;
     for (let i = 0; i < cands.length && i < PLAN_WIDTH; i++) {
@@ -362,7 +382,7 @@
        4. a safety. */
   function aimFrom(ctx, cuePos) {
     const shot = bestPot(ctx, cuePos);
-    if (shot && (shot.hardness < MAX_HARDNESS || ctx.onEight)) {
+    if (shot && (shot.hardness < MAX_HARDNESS || onGameBall(ctx))) {
       return {
         yaw: shot.yaw, sigma: aimSigma(shot.cosCut, shot.dCue, shot.dObj),
         // the speed the position planner settled on, if it got to run
@@ -372,7 +392,7 @@
     }
 
     const bank = bestBank(ctx, cuePos);
-    if (bank && (bank.hardness < MAX_BANK_HARDNESS || ctx.onEight)) {
+    if (bank && (bank.hardness < MAX_BANK_HARDNESS || onGameBall(ctx))) {
       return {
         yaw: bank.yaw, sigma: aimSigma(bank.cosCut, bank.dCue, bank.dObj),
         power: powerFor(bank, true), pocket: bank.pocket,
@@ -421,7 +441,7 @@
     cands.sort((a, b) => a.dObj - b.dObj);
 
     let best = cands[0];
-    if (!ctx.onEight && window.PoolPos) {
+    if (!onGameBall(ctx) && window.PoolPos) {
       let bestScore = Infinity;
       for (let i = 0; i < cands.length && i < PLAN_WIDTH; i++) {
         const c = cands[i];
@@ -438,6 +458,39 @@
       power: best.power != null ? best.power : powerFor(best),
       pocket: best.pocket, target: best.target,
     };
+  }
+
+  /* Where to drop the cue ball when NO dead-straight placement exists — every
+     line to a legal ball is blocked, or the only pot left is behind traffic.
+     Sweeps the table on a coarse grid and keeps the spot with the easiest pot
+     from it, falling back to the openest square when nothing is on at all.
+     This matters most in 9-ball, where only one ball is ever legal to hit, so
+     placeShot() comes up empty far more often than it does in 8-ball. */
+  const GRID_X = 13, GRID_Z = 7;
+  function fallbackPlace(ctx) {
+    const { balls, R, LIMX, LIMZ } = ctx;
+    const targets = legalTargets(ctx);
+    const clear = 2 * R * 0.98;
+    let best = null, bestScore = Infinity;
+    for (let i = 0; i < GRID_X; i++) {
+      for (let j = 0; j < GRID_Z; j++) {
+        // Inset a ball's width from the rails: a cue frozen on a cushion is
+        // an awkward bridge and gives up most of the point of ball-in-hand.
+        const x = -LIMX + R + (2 * (LIMX - R)) * (i / (GRID_X - 1));
+        const z = -LIMZ + R + (2 * (LIMZ - R)) * (j / (GRID_Z - 1));
+        const p = { x, z };
+        if (balls.some(b => Math.hypot(b.x - x, b.z - z) < 2 * R * 1.15)) continue;
+        // Prefer a spot with a pot on; failing that, one that can at least see a
+        // legal ball, so the stroke is a legal hit rather than a foul.
+        let score = easiestPot(ctx, p, balls, targets);
+        if (score >= NO_SHOT) {
+          const sees = targets.some(T => !pathBlocked(p, T, balls, [T.id], clear));
+          score = NO_SHOT + (sees ? 0 : 1);
+        }
+        if (score < bestScore) { bestScore = score; best = p; }
+      }
+    }
+    return best;
   }
 
   // Opening break: smash straight into the rack (aim at the nearest racked ball)
@@ -481,8 +534,9 @@
     if (ctx.phase === 'place') {
       shot = placeShot(ctx);
       if (!shot) {
-        // No clean straight placement — drop the cue on the break spot and aim.
-        const cuePos = { x: -ctx.PW * 0.5, z: 0 };
+        // No clean straight placement — sweep for the best spot going and aim
+        // from there. Never the break spot: that sits ON the end cushion.
+        const cuePos = fallbackPlace(ctx) || { x: -ctx.LIMX + ctx.R, z: 0 };
         shot = aimFrom(ctx, cuePos);
         shot.place = cuePos;
       }
@@ -493,12 +547,20 @@
     // On the 8, a pocket must ALWAYS be called — the human is forced to, so the
     // bot doesn't get to duck it by playing a shot with no pot in mind. Kept in
     // `callPocket` rather than `pocket` so it can't be mistaken for an aim point
-    // by game.js's shot tuning.
-    if (ctx.onEight && (shot.pocket == null || shot.pocket < 0)) {
+    // by game.js's shot tuning. 9-ball calls nothing: the 9 wins in any pocket,
+    // so there's nothing to nominate.
+    if (ctx.lowestId == null && ctx.onEight && (shot.pocket == null || shot.pocket < 0)) {
       shot.callPocket = nominateFor8(ctx);
     }
     return shot;
   }
 
-  window.PoolBot = { chooseShot };
+  // chooseShot is the bot's whole job. The rest is exposed for the offline
+  // tools in tools/: a shot-outcome model has to be trained on EXACTLY the
+  // features the bot will feed it at run time, so the generator calls the same
+  // candidate enumeration rather than reimplementing the geometry and drifting.
+  window.PoolBot = {
+    chooseShot,
+    potCandidates, legalTargets, powerFor, aimSigma,
+  };
 })();

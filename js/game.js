@@ -4,16 +4,111 @@
 
 /* ================================ CONFIG ================================ */
 
-const PW = 1.27;              // half-length of play field (x)
-const PH = 0.635;             // half-width of play field (z)
-const R  = 0.0286;            // ball radius
 const TABLE_Y = 0.80;         // felt surface height
-const BALL_Y  = TABLE_Y + R;  // ball center height
 
-const LIMX = PW - R;          // cushion planes for ball centers
-const LIMZ = PH - R;
-const CORNER_GAP = 0.085;     // cushion cut-back near corner pockets
-const SIDE_GAP   = 0.058;     // half-width of side pocket mouth
+/* ---------------------------- table profiles ----------------------------
+ * A pool table and a snooker table are not the same table with different
+ * markings: what separates them is how many BALL WIDTHS across they are. A
+ * 9-foot pool table is about 44 ball-diameters long; a full-size snooker table
+ * is 68. Racking snooker's 21 object balls on pool proportions gives you a
+ * cramped, absurdly easy table, so snooker gets a bed of its own.
+ *
+ * Both profiles keep the same world footprint (PW is unchanged), so the camera
+ * rig, the lighting, the shadow bounds and every background scene stay exactly
+ * as tuned — what changes is the size of the ball on it, and the pockets and
+ * cushion cut-backs that scale with the ball.
+ *
+ * The snooker numbers come from the WPBSA standard table: a 3569 x 1778 mm
+ * playing area with 52.5 mm balls. So, holding the bed's length at 2*PW:
+ *     ball diameter = 2*PW * 52.5/3569     -> 68 diameters along the table
+ *     half-width PH = PW  * 1778/3569      -> the true 2.0073:1 bed, not 2:1
+ * Everything sized off the ball (pockets, cut-backs, pocket insets) is scaled
+ * by the same ratio, which keeps potting exactly as forgiving, ball-for-ball,
+ * as it is in the pool games — while the table being half again as long in ball
+ * widths is what makes snooker play long, the way it should.
+ */
+const SNOOKER_BALL_F = 52.5 / 3569;   // ball diameter as a fraction of the length
+const SNOOKER_BED_F = 1778 / 3569;    // width as a fraction of the length
+
+const TABLE_PROFILES = {
+  // The pool bed, unchanged: a 2:1 field with 57 mm-equivalent balls.
+  pool: {
+    PW: 1.27, PH: 0.635, R: 0.0286,
+    cornerR: 0.075, sideR: 0.066,     // pocket capture radii
+    cornerGap: 0.085,                 // cushion cut-back near corner pockets
+    sideGap: 0.058,                   // half-width of the side pocket mouth
+    cornerInset: 0.012, sideInset: 0.024, // how far each cup sits past the rail
+    startRadius: 0.95,                // camera distance for the shot view
+    ballScale: 1,                     // this profile's ball vs the pool ball
+  },
+  snooker: (() => {
+    const PW = 1.27;
+    const R = PW * SNOOKER_BALL_F;    // (2*PW * f) / 2
+    const k = R / 0.0286;             // everything ball-sized shrinks with it
+    return {
+      PW, PH: PW * SNOOKER_BED_F, R,
+      cornerR: 0.075 * k, sideR: 0.066 * k,
+      cornerGap: 0.085 * k, sideGap: 0.058 * k,
+      cornerInset: 0.012 * k, sideInset: 0.024 * k,
+      // Pull the shot view in with the ball, or a snooker ball reads as a speck
+      // from pool's camera distance. Not the full ball ratio — that would bury
+      // the camera in the cloth — but enough to keep the cue ball readable.
+      startRadius: 0.95 * (0.5 + 0.5 * k),
+      ballScale: k,
+    };
+  })(),
+};
+
+// The live table geometry, rewritten by applyTableProfile(). These are `let`
+// rather than `const` because snooker plays on its own bed; everything that
+// reads them does so at run time.
+let PW, PH, R, BALL_Y, LIMX, LIMZ, CORNER_GAP, SIDE_GAP, START_RADIUS;
+// The current profile's ball size relative to the pool ball. buildTable() sizes
+// the cushions, rails and sight diamonds off this: leave them absolute and a
+// snooker ball — barely two thirds the size — would sit lower than the cushion
+// nose and vanish behind the rails from the shooting camera.
+let BALL_SCALE = 1;
+// Pocket cups: indices 0-3 are the corners, 4-5 the sides — physicsStep gates
+// side-pocket capture on `pi >= 4`, and 8-ball's called pocket travels over the
+// wire as an index, so the ORDER here is load-bearing. Rewritten in place so
+// modules that captured the array (js/aimassist.js) keep pointing at it.
+const POCKETS = [];
+let tableProfile = '';
+// The descriptor handed to js/physics.js, rebuilt lazily: the bed changes with
+// the rule set, and POCKETS is rewritten in place rather than replaced.
+let physT = null;
+
+// Switch the bed to a profile. Returns true if anything actually changed, which
+// is the caller's cue to rebuild the ball geometry and the table mesh — this
+// function only touches the numbers.
+function applyTableProfile(name) {
+  if (tableProfile === name) return false;
+  const p = TABLE_PROFILES[name] || TABLE_PROFILES.pool;
+  tableProfile = name;
+  PW = p.PW; PH = p.PH; R = p.R;
+  BALL_Y = TABLE_Y + R;               // ball center height
+  LIMX = PW - R; LIMZ = PH - R;       // cushion planes for ball centers
+  CORNER_GAP = p.cornerGap;
+  SIDE_GAP = p.sideGap;
+  START_RADIUS = p.startRadius;
+  BALL_SCALE = p.ballScale;
+  physT = null;                       // the core's descriptor is now stale
+  const ci = p.cornerInset, si = p.sideInset;
+  POCKETS.length = 0;
+  POCKETS.push(
+    { x: -PW - ci, z: -PH - ci, r: p.cornerR },
+    { x:  PW + ci, z: -PH - ci, r: p.cornerR },
+    { x: -PW - ci, z:  PH + ci, r: p.cornerR },
+    { x:  PW + ci, z:  PH + ci, r: p.cornerR },
+    { x: 0,        z: -PH - si, r: p.sideR },
+    { x: 0,        z:  PH + si, r: p.sideR }
+  );
+  return true;
+}
+applyTableProfile('pool');            // 8-ball is the default game
+
+// Which bed a rule set plays on.
+function profileFor(game) { return game === 'snooker' ? 'snooker' : 'pool'; }
 
 const REST_BALL = 0.95;       // ball-ball restitution
 const REST_CUSH = 0.72;       // cushion restitution
@@ -26,19 +121,18 @@ const BREAK_BOOST = 1.9;      // extra cue speed on the opening break
 const MAX_PULL = 0.34;        // world-units of cue pull-back at full power
 const PHYS_H = 1 / 480;       // physics substep
 
-const POCKETS = [
-  { x: -PW - 0.012, z: -PH - 0.012, r: 0.075 },
-  { x:  PW + 0.012, z: -PH - 0.012, r: 0.075 },
-  { x: -PW - 0.012, z:  PH + 0.012, r: 0.075 },
-  { x:  PW + 0.012, z:  PH + 0.012, r: 0.075 },
-  { x: 0,           z: -PH - 0.024, r: 0.066 },
-  { x: 0,           z:  PH + 0.024, r: 0.066 },
-];
-
 const BALL_COLORS = {
   1: '#f2b705', 2: '#1d5fbf', 3: '#d0342c', 4: '#6a2d9c',
   5: '#e8720c', 6: '#1a8a4f', 7: '#8a2033', 8: '#181820',
 };
+
+// The snooker rules module (js/snooker.js) — ball values, spot geometry and the
+// stroke verdict. Aliased once here because it's referenced from the rack, the
+// resolve path and the HUD alike.
+const SNK = window.PoolSnooker;
+// The simulation core (js/physics.js). Shared verbatim with the headless driver
+// in tools/, so a shot plays out identically in Node and in the browser.
+const PHYS = window.PoolPhysics;
 
 /* =============================== RENDERER =============================== */
 
@@ -56,7 +150,7 @@ scene.fog = new THREE.Fog('#171d2b', 7, 16);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 60);
 
 /* camera orbit state */
-const START_PITCH = 0.34, START_RADIUS = 0.95; // the low first-person shot view
+const START_PITCH = 0.34; // the low first-person shot view (START_RADIUS is per-profile)
 // Bird's-eye "survey" pose — shown while the local player must make a
 // decision that benefits from seeing the whole table: placing the cue ball
 // after a foul (S.PLACING) or nominating a pocket on the 8-ball (S.CALLING).
@@ -366,6 +460,10 @@ function disposeGroup(g) {
   });
 }
 
+// The pool table's two felt spots, refreshed on every buildTable() so
+// setSnookerMarkings can hide them without digging through the scene graph.
+const poolSpots = [];
+
 function buildTable(C) {
   const table = new THREE.Group();
   const frameMat = C.metal ? metalMat(C.frame) : mat(C.frame);
@@ -376,16 +474,22 @@ function buildTable(C) {
   bed.position.y = TABLE_Y - 0.03; bed.castShadow = bed.receiveShadow = true;
   table.add(bed);
 
-  // felt markings
-  const spotGeo = new THREE.CircleGeometry(0.012, 8);
+  // felt markings — the head and foot spots of a pool table. Snooker chalks a
+  // different set entirely (see buildSnookerMarks), so they're kept in a list
+  // and hidden while that game is up.
+  poolSpots.length = 0;
+  const spotGeo = new THREE.CircleGeometry(0.012 * BALL_SCALE, 8);
   for (const sx of [-PW / 2, PW / 2]) {
     const s = new THREE.Mesh(spotGeo, mat('#cfe3d5'));
     s.rotation.x = -Math.PI / 2; s.position.set(sx, TABLE_Y + 0.0008, 0);
     table.add(s);
+    poolSpots.push(s);
   }
 
-  // cushions
-  const cushH = 0.045, cushDepth = 0.052;
+  // cushions. Sized off the ball (BALL_SCALE), so the nose always sits at the
+  // same fraction of a ball's height whichever bed is up.
+  const cushH = 0.045 * BALL_SCALE, cushDepth = 0.052 * BALL_SCALE;
+  const cushCut = 0.035 * BALL_SCALE;
   const cushMat = mat(C.feltDark);
   function cushion(len, cut) {
     const half = len / 2;
@@ -401,21 +505,22 @@ function buildTable(C) {
   const longLen = PW - CORNER_GAP - SIDE_GAP;
   const longCx = (PW - CORNER_GAP + SIDE_GAP) / 2;
   for (const zs of [-1, 1]) for (const xs of [-1, 1]) {
-    const c = cushion(longLen, 0.035);
+    const c = cushion(longLen, cushCut);
     if (zs < 0) c.rotation.y = Math.PI;
     c.position.set(xs * longCx, TABLE_Y, zs * (PH + cushDepth));
     table.add(c);
   }
   const shortLen = 2 * (PH - CORNER_GAP);
   for (const xs of [-1, 1]) {
-    const c = cushion(shortLen, 0.035);
+    const c = cushion(shortLen, cushCut);
     c.rotation.y = xs > 0 ? Math.PI / 2 : -Math.PI / 2;
     c.position.set(xs * (PW + cushDepth), TABLE_Y, 0);
     table.add(c);
   }
 
-  // rail frame
-  const railW = 0.11, railH = 0.09;
+  // rail frame — also ball-scaled, so the rail top stays just under the top of
+  // a ball and never hides one from a low camera.
+  const railW = 0.11 * BALL_SCALE, railH = 0.09 * BALL_SCALE;
   const frameX = PW + cushDepth + railW / 2;
   const frameZ = PH + cushDepth + railW / 2;
   for (const zs of [-1, 1]) {
@@ -429,7 +534,7 @@ function buildTable(C) {
 
   // rail sight diamonds: three evenly spaced along every rail segment between
   // adjacent pockets — 6 per long rail (split by the side pocket), 3 per short.
-  const diaGeo = new THREE.CircleGeometry(0.014, 4);
+  const diaGeo = new THREE.CircleGeometry(0.014 * BALL_SCALE, 4);
   const diaMat = mat(diamondColor(C.frame), { roughness: 0.5 });
   const diaY = TABLE_Y + 0.005 + railH / 2 + 0.001;
   // `long` = the world axis the diamond is stretched along; we point it toward
@@ -484,8 +589,64 @@ function setTableStyle(i) {
   if (tableGroup) { scene.remove(tableGroup); disposeGroup(tableGroup); }
   tableGroup = buildTable(TABLE_STYLES[currentTableStyle]);
   scene.add(tableGroup);
+  // The felt spots were just rebuilt, so re-assert whichever set this game wants.
+  setSnookerMarkings(!!snookerMarks && snookerMarks.visible);
   // pocket materials were just rebuilt fresh (dark); drop any stale glow state
   if (window.AimAssist) window.AimAssist.clear();
+}
+
+/* --------------------------- snooker markings --------------------------- */
+// The baulk line, the D and the six colour spots, chalked onto the felt when
+// snooker is the selected game. Kept in a group of their own rather than inside
+// buildTable(), so changing table style (which rebuilds tableGroup from
+// scratch) can't wipe them and they don't have to be redrawn per style.
+let snookerMarks = null;
+
+function buildSnookerMarks() {
+  const L = SNK.layout({ PW, PH, R });
+  const g = new THREE.Group();
+  const chalk = mat('#cfe3d5', { roughness: 0.9 });
+  const y = TABLE_Y + 0.0010; // a hair above the felt, and above the pool spots
+  const flat = (mesh, x, z) => {
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, y, z);
+    g.add(mesh);
+  };
+  // Baulk line, straight across the table.
+  flat(new THREE.Mesh(new THREE.PlaneGeometry(0.004, 2 * PH), chalk), L.baulkX, 0);
+  // The D, bulging back toward the baulk cushion. After the -90° x-rotation a
+  // ring's angle 0 points along world +x and 90° along world -z, so the half
+  // that opens toward -x is the sweep from 90° to 270°.
+  // Drawn a touch heavier than the straight line: the renderer downsamples hard
+  // (PIXEL = 3.2), and a hairline curve breaks up into dots where a straight
+  // one stays solid.
+  flat(new THREE.Mesh(
+    new THREE.RingGeometry(L.dR - 0.0035, L.dR + 0.0035, 64, 1, Math.PI / 2, Math.PI),
+    chalk), L.baulkX, 0);
+  // The six spots.
+  const dot = new THREE.CircleGeometry(0.010, 10);
+  for (const id of SNK.COLOURS) flat(new THREE.Mesh(dot, chalk), L.spots[id].x, L.spots[id].z);
+  return g;
+}
+
+// Throw away the chalked markings so the next setSnookerMarkings(true) re-cuts
+// them. Needed after a table-profile change, since the baulk line, the D and the
+// spots are all sized off the bed they were built for.
+function dropSnookerMarks() {
+  if (!snookerMarks) return;
+  scene.remove(snookerMarks);
+  disposeGroup(snookerMarks);
+  snookerMarks = null;
+}
+
+// Show or hide the snooker markings; built lazily the first time snooker is
+// picked, so the pool games never pay for geometry they don't draw.
+function setSnookerMarkings(on) {
+  if (on && !snookerMarks) { snookerMarks = buildSnookerMarks(); scene.add(snookerMarks); }
+  if (snookerMarks) snookerMarks.visible = !!on;
+  // A snooker table has no head or foot spot — its pink happens to sit where
+  // the foot spot is, but the head spot would just be a stray mark.
+  for (const sp of poolSpots) sp.visible = !on;
 }
 
 setTableStyle(0);
@@ -523,25 +684,57 @@ function ballTexture(num) {
   return tex;
 }
 
-const ballGeo = new THREE.SphereGeometry(R, 14, 10);
-const balls = []; // {id, mesh, x, z, vx, vz, potted, sinking}
+// Rebuilt whenever the table profile changes — snooker's ball is a different
+// size, and every ball mesh plus the ball-in-hand ghost shares this one geometry.
+let ballGeo = new THREE.SphereGeometry(R, 14, 10);
 
-for (let id = 0; id <= 15; id++) {
-  const m = new THREE.Mesh(ballGeo, new THREE.MeshStandardMaterial({
+// Snooker needs 22 balls (cue + 15 reds + 6 colours) where pool needs 16, so
+// the array is always built to the larger size and the pool games park ids
+// 16-21 the way 9-ball parks 10-15 (see parkBalls). Each ball carries a
+// material for each look — the numbered pool ball, or the plain snooker one —
+// because a mesh's texture can't depend on a rule set that's picked later;
+// rackBalls swaps them via applyBallLook().
+const balls = []; // {id, mesh, poolMat, snkMat, x, z, vx, vz, potted, sink}
+
+for (let id = 0; id <= 21; id++) {
+  // Snooker balls carry no number and no stripe, so they need no texture at
+  // all — a flat-shaded colour is the whole look.
+  const snkMat = new THREE.MeshStandardMaterial({
+    color: id === 0 ? '#f4f1e8' : SNK.hex(id),
+    flatShading: true, roughness: 0.32, metalness: 0.05,
+  });
+  const poolMat = id <= 15 ? new THREE.MeshStandardMaterial({
     map: ballTexture(id), flatShading: true, roughness: 0.32, metalness: 0.05,
-  }));
+  }) : null;
+  const m = new THREE.Mesh(ballGeo, poolMat || snkMat);
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m);
-  balls.push({ id, mesh: m, x: 0, z: 0, vx: 0, vz: 0, potted: false, sink: 0 });
+  balls.push({ id, mesh: m, poolMat, snkMat, x: 0, z: 0, vx: 0, vz: 0, potted: false, sink: 0 });
 }
 const cue = balls[0];
+
+// Point every ball at the look the current rule set wants. Cheap enough to run
+// on every rack, and the only place the two material sets are ever chosen
+// between, so a ball can't end up wearing the wrong game's skin.
+function applyBallLook() {
+  const snk = gameMode === 'snooker';
+  for (const b of balls) b.mesh.material = snk ? b.snkMat : (b.poolMat || b.snkMat);
+}
 
 /* Data + controls the aim-assist module (js/aimassist.js) needs. Kept as a
    small explicit surface so that feature can live in its own file. */
 window.PoolAimHooks = {
+  // POCKETS and balls are arrays game.js mutates in place, so a module may hold
+  // on to them. The scalars are getters instead: they change with the table
+  // profile (snooker plays a smaller ball on its own bed), and a value captured
+  // at load would silently go stale.
+  scene, POCKETS, balls, TABLE_Y,
   // LIMZ + SIDE_GAP: the long-rail plane and its side-pocket slot, so the assist
   // can test whether a ball can actually thread into a side pocket.
-  scene, POCKETS, R, LIMZ, SIDE_GAP, BALL_Y, TABLE_Y, balls,
+  get R() { return R; },
+  get LIMZ() { return LIMZ; },
+  get SIDE_GAP() { return SIDE_GAP; },
+  get BALL_Y() { return BALL_Y; },
   // Turn a pocket's black void green (and glowing) or back to normal. Reads the
   // live pocketMats so it keeps working after a table-style rebuild.
   setPocketGlow(i, on) {
@@ -552,11 +745,39 @@ window.PoolAimHooks = {
   },
 };
 
+// Re-cut everything sized off the ball radius and hand it to the meshes that
+// use it: the balls themselves, the ball-in-hand ghost, the ghost-ball contact
+// ring in the aim guide, and the ring drawn around the ball that's on. Cheap
+// (a few small primitives), and the only place ball size is ever changed, so
+// nothing can be left at the previous table's scale.
+function rebuildBallGeometry() {
+  const sphere = new THREE.SphereGeometry(R, 14, 10);
+  ballGeo.dispose();
+  ballGeo = sphere;
+  for (const b of balls) b.mesh.geometry = ballGeo;
+  placeGhost.geometry = ballGeo;
+
+  ghostRing.geometry.dispose();
+  ghostRing.geometry = new THREE.RingGeometry(R * 0.7, R, 16);
+  targetRing.geometry.dispose();
+  targetRing.geometry = new THREE.RingGeometry(R * 1.3, R * 1.75, 22);
+
+  // Both cues are modelled from the tip along +Z, so scaling the group shrinks
+  // them about the contact point and leaves every aiming transform untouched.
+  // A real cue is much the same length whatever the game, but a snooker ball is
+  // two thirds the size — so on this bed the cue comes down with it, or it
+  // reads as a telegraph pole lying across the table.
+  stick.scale.setScalar(BALL_SCALE);
+  ghostStick.scale.setScalar(BALL_SCALE);
+}
+
 // Hook for js/backgrounds.js: enough of the scene to hang decoration off of and
 // tint the sky/fog. Deliberately exposes no lights — backgrounds must not touch
 // the lighting rig, so the table's shading is identical in every environment.
 window.PoolScene = {
-  scene, TABLE_Y, PW, PH,
+  scene, TABLE_Y,
+  get PW() { return PW; },
+  get PH() { return PH; },
   setSky(color) { scene.background = new THREE.Color(color); },
   setFog(color, near, far) { scene.fog = new THREE.Fog(color, near, far); },
   clearFog() { scene.fog = null; },
@@ -570,9 +791,40 @@ function rackBalls() {
     b.mesh.quaternion.identity();
   }
   cue.x = -PW / 2; cue.z = 0;
-  if (gameMode === '9ball') rackNine(); else rackEight();
+  applyBallLook();
+  if (gameMode === 'snooker') rackSnooker();
+  else if (gameMode === '9ball') rackNine();
+  else rackEight();
   breakShot = true; // next shot is the opening break
   syncBallMeshes(0);
+}
+
+// Park the balls a rule set doesn't use: flagged potted and hidden, which is
+// exactly the state physics, the aim assist, the bot's context and the recap
+// boards already skip. 9-ball parks 10-15; both pool games park the six
+// snooker colours (16-21).
+function parkBalls(ids) {
+  for (const id of ids) {
+    const b = balls[id];
+    b.potted = true; b.sink = 0; b.mesh.visible = false;
+  }
+}
+
+// Snooker: fifteen reds in a triangle behind the pink, the six colours on their
+// spots. js/snooker.js owns every one of those positions — see the table
+// fractions in its geometry section. The frame opens in hand from the D, so the
+// cue ball here is only where the placing ghost starts out.
+function rackSnooker() {
+  const L = SNK.layout({ PW, PH, R });
+  for (const { id, x, z } of L.reds) { balls[id].x = x; balls[id].z = z; }
+  for (const id of SNK.COLOURS) {
+    balls[id].x = L.spots[id].x; balls[id].z = L.spots[id].z;
+  }
+  cue.x = L.baulkX - L.dR * 0.35; cue.z = L.dR * 0.55;
+  // Scores belong to the match, not the rack (resetSceneAfterGame re-racks
+  // behind the end screen and must not wipe the final score) — startMatch owns
+  // them. Only the targeting state resets here.
+  snooker.st = SNK.opening(id => balls[id].potted);
 }
 
 // 9-ball: the nine-ball diamond (js/nineball.js owns the layout). Balls 10-15
@@ -583,13 +835,11 @@ function rackNine() {
   for (const { id, x, z } of N.rack({ PW, R, shuffle })) {
     balls[id].x = x; balls[id].z = z;
   }
-  for (const id of N.IDLE_BALLS) {
-    const b = balls[id];
-    b.potted = true; b.sink = 0; b.mesh.visible = false;
-  }
+  parkBalls(N.IDLE_BALLS.concat(SNK.COLOURS));
 }
 
 function rackEight() {
+  parkBalls(SNK.COLOURS);
   const solids = shuffle([1, 2, 3, 4, 5, 6, 7]);
   const stripes = shuffle([9, 10, 11, 12, 13, 14, 15]);
   const cornerA = solids.pop(), cornerB = stripes.pop();
@@ -613,12 +863,16 @@ function rackEight() {
   }
 }
 
-// Bring a ball back onto the table (9-ball spots an illegally pocketed 9). It
-// goes on the foot spot, or — if that's occupied — the first clear gap up the
-// table from it, so spotting can never bury it inside another ball.
+// Bring a ball back onto the table: 9-ball spots an illegally pocketed 9, and
+// snooker re-spots colours constantly. The destination is the ball's own spot —
+// in snooker, or failing that the highest-value spot still free, which is the
+// rule js/snooker.js resolves. If even that is covered the ball walks up the
+// table to the first clear gap, so spotting can never bury it inside another.
 function spotBall(id) {
   const b = balls[id];
-  const home = window.PoolNineBall.spot({ PW, R });
+  const home = gameMode === 'snooker'
+    ? SNK.respotSpot({ PW, PH, R }, id, (x, z) => spotClear(x, z, id))
+    : window.PoolNineBall.spot({ PW, R });
   const step = 2 * R * 1.06;
   let x = home.x;
   for (let k = 0; k < 60; k++) {
@@ -626,6 +880,8 @@ function spotBall(id) {
     if (spotClear(cand, home.z, id)) { x = cand; break; }
     x = cand;
   }
+  // Snooker's last resort is "as near as possible to its own spot on the centre
+  // line, toward the top cushion" — which is what the walk above just did.
   b.potted = false; b.sink = 0; b.vx = 0; b.vz = 0;
   b.x = x; b.z = home.z;
   b.mesh.visible = true; b.mesh.scale.setScalar(1);
@@ -673,148 +929,52 @@ function syncBallMeshes(dt) {
 // (js/nineball.js) turns on exactly that ordering, so it's gated on firstHit.
 let shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
 
-function anyMoving() {
-  for (const b of balls) if (!b.potted && (b.vx !== 0 || b.vz !== 0)) return true;
-  return false;
-}
+function anyMoving() { return PHYS.anyMoving(balls); }
 
-function potBall(b, pocketIndex) {
-  b.potted = true; b.sink = 0.25;
-  b.vx = 0; b.vz = 0;
-  b.mesh.position.set(b.x, BALL_Y, b.z);
-  if (b.id === 0) shotEvents.scratch = true;
-  else {
-    shotEvents.potted.push(b.id);
-    if (b.id === 8) shotEvents.eightPocket = pocketIndex; // for the called-shot check
-  }
-  sfx.pocket();
-  announcePot(b.id);
-  // Tell the watcher to sink this ball now, instead of leaving it stranded at
-  // its last streamed spot until the shot's authoritative state arrives.
-  if (onlineMode && myTurn()) netSend({ t: 'pot', id: b.id, x: round4(b.x), z: round4(b.z) });
+// Everything js/physics.js needs from the CONFIG block above. Cached, because
+// this is read 480 times a second, and invalidated by applyTableProfile.
+function physTable() {
+  return physT || (physT = {
+    R, PW, PH, LIMX, LIMZ, CORNER_GAP, SIDE_GAP, POCKETS,
+    REST_BALL, REST_CUSH, CUSH_GRIP, FRIC_C, FRIC_L, STOP_V,
+  });
 }
 
 // Fire a top-right "pocketed" popup for the current shooter. Runs on the
 // shooter's own client here; the watcher fires the same from applyPot().
 function announcePot(id) {
   if (!window.PoolNotify) return;
+  const who = players[turn].cfg.name;
+  // Snooker balls have names, not numbers, and a plain disc for a chip.
+  if (gameMode === 'snooker') {
+    return window.PoolNotify.pocket(who, id, id === 0 ? null : SNK.hex(id),
+      id === 0 ? 'cue ball' : SNK.name(id).toLowerCase());
+  }
   const color = id === 0 ? null : BALL_COLORS[id > 8 ? id - 8 : id];
-  window.PoolNotify.pocket(players[turn].cfg.name, id, color);
+  window.PoolNotify.pocket(who, id, color);
 }
 
+// Advance the table one substep, then act on what the core reports. Every side
+// effect the old physicsStep had inline lives here now — the sinking animation,
+// the sounds, the pot popup, the watcher's early "sink it now" message — which
+// is what lets js/physics.js stay pure enough to run in Node.
 function physicsStep(h) {
-  // integrate + friction
-  for (const b of balls) {
-    if (b.potted) continue;
-    let sp = Math.hypot(b.vx, b.vz);
-    if (sp > 0) {
-      const dec = (FRIC_C + FRIC_L * sp) * h;
-      const ns = sp - dec;
-      if (ns <= STOP_V * 0.5) { b.vx = 0; b.vz = 0; sp = 0; }
-      else { const k = ns / sp; b.vx *= k; b.vz *= k; sp = ns; }
-    }
-    b.x += b.vx * h;
-    b.z += b.vz * h;
-  }
-
-  // cushions + pockets
-  for (const b of balls) {
-    if (b.potted) continue;
-
-    // pocket capture. Side pockets (index 4-5) sit behind the long rail, past
-    // z = ±LIMZ — same threshold the cushion below bounces at — so their capture
-    // circle (drawn wide for a forgiving mouth) doesn't bulge onto the felt and
-    // snag a ball merely gliding along the rail. Corner pockets don't need this
-    // gate: their mouth sits in the existing CORNER_GAP cushion cut-back, which
-    // already keeps the felt clear right up to the corner.
-    let captured = false;
-    for (let pi = 0; pi < POCKETS.length; pi++) {
-      const p = POCKETS[pi];
-      if (pi >= 4 && Math.abs(b.z) < LIMZ) continue;
-      const dx = b.x - p.x, dz = b.z - p.z;
-      if (dx * dx + dz * dz < p.r * p.r) { potBall(b, pi); captured = true; break; }
-    }
-    if (captured) continue;
-
-    // long rails (z = ±PH): cushion present unless in a pocket mouth
-    if (Math.abs(b.z) > LIMZ) {
-      const inCorner = Math.abs(b.x) > PW - CORNER_GAP;
-      const inSide = Math.abs(b.x) < SIDE_GAP;
-      if (!inCorner && !inSide) {
-        const s = Math.sign(b.z);
-        if (b.vz * s > 0) {
-          b.z = s * LIMZ;
-          b.vz = -b.vz * REST_CUSH;
-          b.vx *= (1 - CUSH_GRIP);
-          sfx.cushion(Math.abs(b.vz));
-          if (shotEvents.firstHit !== null) shotEvents.cushion = true;
-        }
-      }
-    }
-    // short rails (x = ±PW)
-    if (Math.abs(b.x) > LIMX) {
-      const inCorner = Math.abs(b.z) > PH - CORNER_GAP;
-      if (!inCorner) {
-        const s = Math.sign(b.x);
-        if (b.vx * s > 0) {
-          b.x = s * LIMX;
-          b.vx = -b.vx * REST_CUSH;
-          b.vz *= (1 - CUSH_GRIP);
-          sfx.cushion(Math.abs(b.vx));
-          if (shotEvents.firstHit !== null) shotEvents.cushion = true;
-        }
-      }
-    }
-    // escaped through a mouth but missed the cup — drop into nearest pocket
-    if (Math.abs(b.x) > PW + 0.02 || Math.abs(b.z) > PH + 0.04) {
-      let best = 0, bd = Infinity;
-      for (let pi = 0; pi < POCKETS.length; pi++) {
-        const d2 = (b.x - POCKETS[pi].x) ** 2 + (b.z - POCKETS[pi].z) ** 2;
-        if (d2 < bd) { bd = d2; best = pi; }
-      }
-      b.x = POCKETS[best].x; b.z = POCKETS[best].z;
-      potBall(b, best);
-    }
-  }
-
-  // ball-ball collisions
-  const D = 2 * R;
-  for (let i = 0; i < balls.length; i++) {
-    const a = balls[i];
-    if (a.potted) continue;
-    for (let j = i + 1; j < balls.length; j++) {
-      const b = balls[j];
-      if (b.potted) continue;
-      let nx = b.x - a.x, nz = b.z - a.z;
-      const d2 = nx * nx + nz * nz;
-      if (d2 >= D * D || d2 === 0) continue;
-      const d = Math.sqrt(d2);
-      nx /= d; nz /= d;
-      // positional correction
-      const pen = (D - d) / 2;
-      a.x -= nx * pen; a.z -= nz * pen;
-      b.x += nx * pen; b.z += nz * pen;
-      // impulse (equal masses)
-      const rvn = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
-      if (rvn < 0) {
-        const jimp = -(1 + REST_BALL) * rvn / 2;
-        a.vx -= jimp * nx; a.vz -= jimp * nz;
-        b.vx += jimp * nx; b.vz += jimp * nz;
-        sfx.clack(Math.abs(rvn));
-        // record which object ball the cue ball strikes first this shot
-        if (shotEvents.firstHit === null && (a.id === 0 || b.id === 0)) {
-          shotEvents.firstHit = a.id === 0 ? b.id : a.id;
-        }
-      }
-    }
-  }
-
-  // stop crawling balls
-  for (const b of balls) {
-    if (b.potted) continue;
-    if (b.vx !== 0 || b.vz !== 0) {
-      if (Math.hypot(b.vx, b.vz) < STOP_V) { b.vx = 0; b.vz = 0; }
-    }
+  const events = PHYS.step(physTable(), balls, h, shotEvents);
+  if (!events) return;
+  for (const e of events) {
+    if (e.type === 'cushion') { sfx.cushion(e.speed); continue; }
+    if (e.type === 'clack') { sfx.clack(e.speed); continue; }
+    const b = balls[e.id];
+    b.sink = 0.25;
+    b.mesh.position.set(b.x, BALL_Y, b.z);
+    // Which pocket the 8 found, for 8-ball's called-shot check. That's a rules
+    // question, so the core just reports the pocket and this decides it means.
+    if (e.id === 8) shotEvents.eightPocket = e.pocket;
+    sfx.pocket();
+    announcePot(e.id);
+    // Tell the watcher to sink this ball now, instead of leaving it stranded at
+    // its last streamed spot until the shot's authoritative state arrives.
+    if (onlineMode && myTurn()) netSend({ t: 'pot', id: e.id, x: round4(b.x), z: round4(b.z) });
   }
 }
 
@@ -938,6 +1098,10 @@ const sfx = (function () {
 
 /* ============================ CUE STICK & GUIDE ========================= */
 
+// Gap between the cue tip and the ball at rest. Ball-sized, like the stick
+// itself — see rebuildBallGeometry, which scales both cues by BALL_SCALE.
+function cueRest() { return 0.035 * BALL_SCALE; }
+
 const stick = new THREE.Group();
 {
   const len = 1.42;
@@ -1036,14 +1200,20 @@ function castAim(px, pz, dx, dz) {
   return { t: bestT, ball: hitBall };
 }
 
-// Ring the lowest ball on the table (9-ball's legal target) while somebody is
-// lining up. Hidden mid-shot, so it never chases a ball that's still rolling.
+// Ring the ball the striker is on while somebody is lining up: 9-ball's lowest
+// ball, or snooker's nominated/sequence colour. Snooker's reds are never ringed
+// — any of them is legal, so a ring on one would read as an instruction.
+// Hidden mid-shot, so it never chases a ball that's still rolling.
 function updateTargetRing() {
-  const show = gameMode === '9ball' &&
-    (state === S.AIM || state === S.CHARGE || state === S.PLACING);
-  const id = show ? lowestBall() : 0;
-  targetRing.visible = id > 0;
-  if (id > 0) targetRing.position.set(balls[id].x, TABLE_Y + 0.003, balls[id].z);
+  const lining = state === S.AIM || state === S.CHARGE || state === S.PLACING;
+  let id = 0;
+  if (lining && gameMode === '9ball') id = lowestBall();
+  else if (lining && gameMode === 'snooker') {
+    const on = snookerOn();
+    if (on.kind !== 'red' && on.ids.length === 1) id = on.ids[0];
+  }
+  targetRing.visible = id > 0 && !balls[id].potted;
+  if (targetRing.visible) targetRing.position.set(balls[id].x, TABLE_Y + 0.003, balls[id].z);
 }
 
 function updateAimVisuals() {
@@ -1100,19 +1270,26 @@ function updateAimVisuals() {
   const pull = state === S.CHARGE ? chargePull : 0;
   const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
   const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
-  stick.position.copy(base).addScaledVector(back, 0.035 + pull);
+  stick.position.copy(base).addScaledVector(back, cueRest() + pull);
   stick.lookAt(base.clone().addScaledVector(back, 5));
 }
 
 /* ============================== GAME STATE ============================== */
 
-const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CALLING: 6 };
+// NOMINATE is snooker's "name your colour" step, the sibling of 8-ball's
+// CALLING: the striker has potted a red and must say which colour they're on
+// before they may shoot.
+const S = { SETUP: 0, AIM: 1, CHARGE: 2, ROLLING: 3, PLACING: 4, END: 5, CALLING: 6, NOMINATE: 7 };
 let state = S.SETUP;
-// Which rule set this match runs: '8ball' (the default) or '9ball'. Picked on
-// the home screen's game tabs and locked in for the match — see setGame().
-// Only the rack, the stroke verdict and the HUD differ; everything else (the
-// physics, ball-in-hand, the camera, the recap) is shared.
+// Which rule set this match runs: '8ball' (the default), '9ball' or 'snooker'.
+// Picked on the home screen's game tabs and locked in for the match — see
+// setGame(). Only the rack, the stroke verdict and the HUD differ; everything
+// else (the physics, the camera, the recap) is shared.
 let gameMode = '8ball';
+// Snooker's frame state. `scores` are the running point totals per seat and
+// `st` is the targeting state js/snooker.js reasons over ({phase, nominated}).
+// Meaningless — and untouched — in the pool games.
+const snooker = { scores: [0, 0], st: { phase: 'red', nominated: 0 } };
 let turn = 0;
 let breakShot = false;        // true until the opening break has been resolved
 let calledPocket = -1;        // pocket index nominated for an 8-ball shot (-1 = none)
@@ -1207,6 +1384,13 @@ function lowestBall() {
   return window.PoolNineBall.lowest(id => balls[id].potted);
 }
 
+// Snooker: what the striker is on right now, as the live table stands. Used by
+// the HUD and the target ring; the resolve path builds its own from the
+// PRE-stroke table instead (see resolveShotSnooker).
+function snookerOn() {
+  return SNK.ballOn(snooker.st, id => balls[id].potted);
+}
+
 // A seat is "on the 8" once its group is cleared and the 8 is still on the table.
 function isOnEight(seat) {
   const g = players[seat].group;
@@ -1228,12 +1412,20 @@ function setCalledPocket(i) {
 function enterAim() {
   hidePlaceGhost(); // never carry a ball-in-hand preview into a shot
   setCalledPocket(-1);
-  // Called shots are an 8-ball rule; 9-ball wins on any legal 9, so it never
-  // stops to nominate a pocket.
-  if (myTurn() && gameMode === '8ball' && isOnEight(turn)) {
+  // Snooker: a red has just gone down, so the striker names the colour they're
+  // on before they may shoot. Unlike 8-ball's pocket call this needs no survey
+  // camera — the choice is a ball, not a spot on the felt, so the player is
+  // better off staying in their aiming view.
+  if (myTurn() && gameMode === 'snooker' && snooker.st.phase === 'colour'
+      && !snooker.st.nominated) {
+    state = S.NOMINATE;
+    showNominate(true);
+    exitSurveyCam();
+  } else if (myTurn() && gameMode === '8ball' && isOnEight(turn)) {
     state = S.CALLING;
     enterSurveyCam(); // bird's-eye view to survey every pocket
   } else {
+    showNominate(false);
     state = S.AIM;
     exitSurveyCam(); // no-op unless we were surveying (e.g. leaving CALLING/PLACING)
   }
@@ -1247,7 +1439,10 @@ function enterAim() {
 function launchCue(dx, dz, power) {
   striking = false;
   shotEvents = { potted: [], scratch: false, firstHit: null, cushion: false, eightPocket: -1 };
-  const speed = power * MAX_V * (breakShot ? BREAK_BOOST : 1);
+  // Snooker has no smash break — the opening stroke is an ordinary shot into
+  // the side of the pack, so it gets no boost.
+  const boost = breakShot && gameMode !== 'snooker' ? BREAK_BOOST : 1;
+  const speed = power * MAX_V * boost;
   cue.vx = dx * speed;
   cue.vz = dz * speed;
   sfx.strike(power);
@@ -1276,7 +1471,7 @@ function fire(power) {
       return;
     }
     stick.position.set(cue.x, BALL_Y, cue.z)
-      .addScaledVector(back, 0.035 + pull0 * (1 - t));
+      .addScaledVector(back, cueRest() + pull0 * (1 - t));
     requestAnimationFrame(anim);
   })();
 }
@@ -1384,6 +1579,10 @@ function botAimTest(decision) {
   return yaw => {
     const { dx, dz, hit } = aimAt(yaw);
     if (!hit.ball) return false;
+    // The tuned aim has to still strike the ball the shot was planned on. Left
+    // open, tuning could slide onto a neighbour that happens to reach the same
+    // pocket — a foul in 9-ball, where only the lowest ball is legal to hit.
+    if (decision.target != null && hit.ball.id !== decision.target) return false;
     return AA.predictPocket(hit, cue.x + dx * hit.t, cue.z + dz * hit.t) === decision.pocket;
   };
 }
@@ -1410,7 +1609,11 @@ function botContext(phase) {
     cue: { x: cue.x, z: cue.z },
     balls: balls.filter(b => b.id !== 0 && !b.potted).map(b => ({ id: b.id, x: b.x, z: b.z })),
     group: players[turn].group,
-    onEight: isOnEight(turn),
+    onEight: gameMode === '8ball' && isOnEight(turn),
+    // In 9-ball the only legal target is the lowest ball on the table; passing it
+    // is what switches bot.js off 8-ball's suits and onto rotation. Null (not 0)
+    // in 8-ball, where suits decide instead.
+    lowestId: gameMode === '9ball' ? lowestBall() : null,
     phase,
     breakShot,
   };
@@ -1467,8 +1670,9 @@ function runBotTurn() {
   // snookered — the shot itself may be a kick or safety with no pot in mind, and
   // bot.js supplies `callPocket` for exactly that case. Without it a fluked 8
   // would count as an uncalled "clean finish" win the human could never get.
+  // 9-ball calls nothing — the 9 wins in any pocket — so this is 8-ball only.
   let forcedCall = null;   // a call made without a pot in mind (snookered on the 8)
-  if (isOnEight(turn)) {
+  if (gameMode === '8ball' && isOnEight(turn)) {
     const aimed = decision.pocket != null && decision.pocket >= 0;
     const call = aimed ? decision.pocket : decision.callPocket;
     if (call != null && call >= 0) {
@@ -1480,7 +1684,8 @@ function runBotTurn() {
   // Announce the plan, then hold before drawing the cue back so there's time to
   // read it and look at the table the computer is describing.
   botSay(window.PoolBotTalk && window.PoolBotTalk.intent(decision, {
-    breakShot, onEight: isOnEight(turn), ballInHand: placing, forcedCall,
+    game: gameMode, breakShot, onEight: gameMode === '8ball' && isOnEight(turn),
+    ballInHand: placing, forcedCall,
   }));
   clearBotTimer();
   botTimer = setTimeout(() => {
@@ -1546,7 +1751,7 @@ function botStrike(power, yaw) {
       launchCue(d.x, d.y, power);
       return;
     }
-    ghostStick.position.copy(base).addScaledVector(back, 0.035 + pull);
+    ghostStick.position.copy(base).addScaledVector(back, cueRest() + pull);
     ghostStick.lookAt(base.clone().addScaledVector(back, 5));
     ghostStick.visible = true;
     requestAnimationFrame(anim);
@@ -1567,6 +1772,142 @@ function lerpAngle(a, b, t) {
 // ball, same shape as serializeState()'s ball list.
 function statsLayout() {
   return balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]);
+}
+
+/* --------------------------- snooker: nominate -------------------------- */
+// After a red goes down the striker names the colour they're on, which fixes
+// both the legal first contact and the value of a foul. The sibling of 8-ball's
+// pocket call (S.CALLING), and the picker is built once from the rules module
+// so its swatches and values can never drift from the balls themselves.
+const nomPanel = document.getElementById('nominate');
+
+function buildNominate() {
+  const row = document.getElementById('nomRow');
+  if (!row || row.children.length) return;
+  for (const id of SNK.COLOURS) {
+    const b = document.createElement('button');
+    b.className = 'nomBtn';
+    b.innerHTML = '<span class="nomBall"></span><span class="nomName"></span><b></b>';
+    b.querySelector('.nomBall').style.background = SNK.hex(id);
+    b.querySelector('.nomName').textContent = SNK.name(id);
+    b.querySelector('b').textContent = SNK.value(id);
+    b.addEventListener('click', () => nominate(id));
+    row.appendChild(b);
+  }
+}
+
+function showNominate(on) {
+  if (nomPanel) nomPanel.classList.toggle('hidden', !on);
+}
+
+function nominate(id) {
+  if (state !== S.NOMINATE || balls[id].potted) return;
+  snooker.st.nominated = id;
+  showNominate(false);
+  state = S.AIM;
+  unpinToast();
+  toast(`On the ${SNK.name(id)} — worth ${SNK.value(id)}`);
+  updateHUD();
+}
+
+/* -------------------------- snooker: ball in hand ----------------------- */
+// The cue ball goes back in the D — the only place snooker ever lets a player
+// put it (the frame's opening stroke, an in-off, or a re-spotted black). Reuses
+// S.PLACING; updatePlaceGhost is what actually enforces the D.
+function beginInHand(msg) {
+  const L = SNK.layout({ PW, PH, R });
+  cue.potted = true;            // off the table until the player places it
+  cue.sink = 0; cue.vx = 0; cue.vz = 0;
+  cue.x = L.baulkX - L.dR * 0.35; cue.z = L.dR * 0.55;
+  cue.mesh.visible = false;
+  showNominate(false);
+  state = S.PLACING;
+  lastFoul = msg;
+  pinToast(msg);
+  enterSurveyCam();             // bird's-eye, so the whole D is in view
+}
+
+/* --------------------------- snooker resolution ------------------------- */
+// Snooker's stroke resolution. The rules themselves live in js/snooker.js; this
+// feeds it the stroke, banks the points, puts back whatever has to come back,
+// and reuses the pool games' turn-passing and end-screen machinery unchanged.
+function resolveShotSnooker() {
+  const shooter = turn;
+  const me = players[shooter];
+  breakShot = false;
+
+  // The ball on as it stood BEFORE the stroke — take this stroke's own pots
+  // back out, exactly as 9-ball does, or potting the ball on would drop it out
+  // of the legal set and the pot would read as a foul.
+  const on = SNK.ballOn(snooker.st,
+    id => balls[id].potted && shotEvents.potted.indexOf(id) < 0);
+  // Reds never come back, foul or not, so the live count is already the final one.
+  const redsAfter = SNK.REDS.reduce((k, id) => k + (balls[id].potted ? 0 : 1), 0);
+
+  const out = SNK.resolve({
+    potted: shotEvents.potted,
+    scratch: shotEvents.scratch,
+    firstHit: shotEvents.firstHit,
+    on, redsAfter,
+  });
+
+  snooker.scores[shooter] += out.points;
+  snooker.scores[1 - shooter] += out.penalty;
+
+  // Log the stroke BEFORE anything is re-spotted: the recap's LAYOUT tab works
+  // out what dropped by diffing the before/after boards, so a colour put back
+  // in the same breath would erase the pot from the log.
+  if (window.MatchStats) {
+    window.MatchStats.recordShot(shooter, out.credited, out.foulKind, statsLayout());
+  }
+
+  // Colours that have to come back go highest-value first, so a high ball is
+  // never shoved off its own spot by a lower one queued ahead of it.
+  for (const id of out.respot.slice().sort((a, b) => SNK.value(b) - SNK.value(a))) {
+    spotBall(id);
+  }
+
+  snooker.st = out.next;
+  if (out.frameOver) return finishFrame();
+
+  if (out.foul) {
+    turn = 1 - shooter;
+    cue.vx = 0; cue.vz = 0;
+    const line = `${SNK.foulText(out.foulKind, on)} ${out.penalty} to ${players[turn].cfg.name}.`;
+    // Snooker has no ball in hand: the incoming player plays from wherever the
+    // cue ball stopped. Only an in-off puts it back in the D.
+    if (shotEvents.scratch) beginInHand(`${line} Place the cue ball in the D.`);
+    else { toast(line, 3600); enterAim(); }
+  } else if (out.keepTurn) {
+    enterAim();  // S.NOMINATE if a red just went down, else straight to aiming
+    const scored = `${isMe(shooter) ? 'You score' : me.cfg.name + ' scores'} ${out.points}`;
+    if (state === S.NOMINATE) {
+      pinToast(`${scored} — now nominate a colour.`);
+    } else {
+      toast(`${scored} — ${snooker.scores[shooter]} on the board.`);
+    }
+  } else {
+    turn = 1 - shooter;
+    enterAim();
+    toast(isMe(turn) ? 'Your visit' : `${players[turn].cfg.name} to play`);
+  }
+  updateHUD();
+}
+
+// The frame is decided: once only the black is left, the first score or foul
+// settles it. Level scores are the one case where "frame over" isn't — the
+// black goes back up and play continues.
+function finishFrame() {
+  const [a, b] = snooker.scores;
+  const line = `${players[0].cfg.name} ${a} — ${b} ${players[1].cfg.name}.`;
+  if (a !== b) return endGame(a > b ? 0 : 1, `Frame decided on the black. ${line}`);
+  // Re-spotted black: the rules call for a toss to decide who plays from in
+  // hand, and the next score or foul ends the frame.
+  if (balls[SNK.BLACK].potted) spotBall(SNK.BLACK);
+  snooker.st = { phase: 'sequence', nominated: 0 };
+  turn = Math.random() < 0.5 ? 0 : 1;
+  beginInHand(`Scores level at ${a} — black re-spotted. ${players[turn].cfg.name} plays from the D.`);
+  updateHUD();
 }
 
 // 9-ball's stroke resolution. The rules themselves live in js/nineball.js;
@@ -1593,6 +1934,16 @@ function resolveShotNine() {
     window.MatchStats.recordShot(turn, out.credited, out.foulKind, statsLayout());
   }
 
+  // The computer's take on how that went — before the win return below, so it
+  // still gets the last word on the shot that decides the match. There's no
+  // `lost` case in 9-ball: an illegally pocketed 9 is spotted, not a loss.
+  if (isBotSeat(turn) && window.PoolBotTalk) {
+    botSay(window.PoolBotTalk.reaction({
+      potted: out.credited, foul: out.foul, scratch: out.foulKind === 'scratch',
+      won: out.win, spotNine: out.spotNine,
+    }));
+  }
+
   if (out.win) {
     return endGame(turn, wasBreak
       ? `${me.cfg.name} sank the 9-ball on the break!`
@@ -1616,6 +1967,7 @@ function resolveShotNine() {
 }
 
 function resolveShot() {
+  if (gameMode === 'snooker') return resolveShotSnooker();
   if (gameMode === '9ball') return resolveShotNine();
   const me = players[turn], opp = players[1 - turn];
   const potted = shotEvents.potted;
@@ -1745,6 +2097,7 @@ function resetSceneAfterGame() {
   rackBalls();
   hidePlaceGhost();
   setCalledPocket(-1); // hide the 8-ball call ring
+  showNominate(false); // and snooker's colour picker
   document.getElementById('help').classList.add('hidden');
   exitSurveyCam(); // don't leave the bird's-eye view stuck if the match ended mid-decision (forfeit)
 }
@@ -1778,27 +2131,56 @@ function forfeit() {
 // Pick the rule set for the NEXT match ('8ball' | '9ball'), from the home
 // screen's game tabs (js/mode.js). A match already underway keeps its own
 // rules; on the home screen the showcase table re-racks so the player can see
-// which game they picked. The computer opponent (js/bot.js) only knows 8-ball,
-// so choosing 9-ball drops the offline setup back to two players.
+// which game they picked. The computer opponent plays both games, so the
+// offline setup toggle carries over untouched.
 function setGame(id) {
-  if ((id !== '8ball' && id !== '9ball') || id === gameMode) return;
+  if (!GAME_HELP[id] || id === gameMode) return;
+  // Only between matches. The rule set now brings its own BED with it, and a
+  // rack laid out on one is meaningless on the other — an 8-ball rack sits
+  // wider than snooker's cushions, so switching under a live match would strand
+  // balls off the table. The game tabs are only reachable from the home screen,
+  // where QUIT has already put us back in S.SETUP, so this costs nothing.
+  if (state !== S.SETUP) return;
   gameMode = id;
-  const cBtn = document.getElementById('vsCpuBtn');
-  if (cBtn) {
-    cBtn.disabled = id !== '8ball';
-    cBtn.title = id === '8ball' ? '' : 'The computer only plays 8-ball for now';
+  // Snooker plays on its own bed (see TABLE_PROFILES). Changing it invalidates
+  // the ball geometry, the table mesh and the chalked markings alike, so all
+  // three are re-cut before anything reads the new numbers.
+  if (applyTableProfile(profileFor(id))) {
+    rebuildBallGeometry();
+    dropSnookerMarks();
+    setTableStyle(currentTableStyle);
   }
-  if (id !== '8ball' && vsCPU) setVsCPU(false);
-  if (state === S.SETUP) { rackBalls(); updateHUD(); }
+  setSnookerMarkings(id === 'snooker');
+  // Snooker is two-player only for now — the computer opponent (js/bot.js)
+  // reasons about suits and rotation, not about reds, colours and nominations —
+  // so the OFFLINE setup toggle is forced back to hot-seat and locked there.
+  const cpuBtn = document.getElementById('vsCpuBtn');
+  if (cpuBtn) cpuBtn.classList.toggle('locked', id === 'snooker');
+  if (id === 'snooker' && vsCPU) setVsCPU(false);
+  rackBalls();     // the showcase table behind the menu shows the chosen game
+  updateHUD();
 }
 
-window.PoolMatch = { forfeit, setGame, game: () => gameMode };
+window.PoolMatch = {
+  forfeit, setGame, game: () => gameMode,
+  // The live physics constants, for the headless tools in tools/. They rebuild
+  // the descriptor js/physics.js runs on plus the stroke constants, so a shot
+  // simulated offline uses the same numbers the game just used.
+  physics: () => Object.assign({}, physTable(), {
+    POCKETS: POCKETS.map(p => ({ x: p.x, z: p.z, r: p.r })),
+    MAX_V, PHYS_H, BREAK_BOOST, BALL_SCALE,
+  }),
+};
 
 // Headline the help card with the rules of the game being played, so a player
 // opening 9-ball for the first time doesn't have to guess the win condition.
 const GAME_HELP = {
   '8ball': ['8-BALL', 'Pot your group, then the 8 in a pocket you call.'],
   '9ball': ['9-BALL', 'Hit the lowest ball first. Pot the 9 — any time — to win.'],
+  snooker: ['SNOOKER', 'Red (1) then a colour you nominate, over and over. '
+    + 'When the reds run out, take the colours in order: yellow 2, green 3, '
+    + 'brown 4, blue 5, pink 6, black 7. Fouls give away 4 or more. Highest '
+    + 'score when the black goes down wins the frame.'],
 };
 function showGameHelp() {
   const [title, rules] = GAME_HELP[gameMode];
@@ -1810,14 +2192,14 @@ function showGameHelp() {
 
 function startMatch() {
   onlineMode = false;          // local match: full control, random rack
-  // vs the computer? (set by the OFFLINE setup toggle) — 9-ball is hot-seat
-  // only for now, the bot doesn't know rotation rules yet.
-  botMode = vsCPU && gameMode === '8ball';
+  // Snooker has no computer opponent yet, so it is always hot-seat.
+  botMode = vsCPU && gameMode !== 'snooker';
   mySeat = 0; botSeat = 1;     // the human is seat 0
   clearBotTimer(); botAim = null; botStriking = false;
   rng = Math.random;
   players[0].group = null;
   players[1].group = null;
+  snooker.scores = [0, 0]; // a fresh frame; rackBalls resets the targeting state
   if (botMode) players[1].cfg.name = 'Computer';
   // Vs-CPU: a 50/50 coin flip decides who breaks each game. Hot-seat and online
   // keep player 1 / the breaker seat as before.
@@ -1839,9 +2221,14 @@ function startMatch() {
   if (window.SettingsPanel) window.SettingsPanel.show();
   document.getElementById('styleName').textContent = TABLE_STYLES[currentTableStyle].name.toUpperCase();
   showGameHelp();
-  toast(isMe(turn) ? `You break. Drag back from the cue ball to shoot.`
-    : botMode ? `${players[turn].cfg.name} breaks…`
-      : `${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
+  // Snooker opens with the cue ball in hand from the D, as every frame does.
+  if (gameMode === 'snooker') {
+    beginInHand(`${players[turn].cfg.name} breaks — place the cue ball in the D.`);
+  } else {
+    toast(isMe(turn) ? `You break. Drag back from the cue ball to shoot.`
+      : botMode ? `${players[turn].cfg.name} breaks…`
+        : `${players[turn].cfg.name} breaks. Drag back from the cue ball to shoot.`);
+  }
   updateHUD();
   // Vs-CPU borrows the online match chat as a one-way commentary feed: the
   // computer narrates each shot (js/bottalk.js), so the composer stays hidden.
@@ -1955,7 +2342,7 @@ function applyShoot(msg) {
   (function anim() {
     const t = (performance.now() - start) / dur;
     if (t >= 1) { watcherStriking = false; ghostStick.visible = false; return; }
-    ghostStick.position.copy(base).addScaledVector(back, 0.035 + pull0 * (1 - t));
+    ghostStick.position.copy(base).addScaledVector(back, cueRest() + pull0 * (1 - t));
     ghostStick.lookAt(base.clone().addScaledVector(back, 5));
     ghostStick.visible = true;
     requestAnimationFrame(anim);
@@ -2070,7 +2457,7 @@ function updateGhostCue() {
     const d = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
     const back = new THREE.Vector3(-d.x, 0.14, -d.y).normalize();
     const base = new THREE.Vector3(cue.x, BALL_Y, cue.z);
-    ghostStick.position.copy(base).addScaledVector(back, 0.035 + (aim.pull || 0));
+    ghostStick.position.copy(base).addScaledVector(back, cueRest() + (aim.pull || 0));
     ghostStick.lookAt(base.clone().addScaledVector(back, 5));
     ghostStick.visible = true;
   } else {
@@ -2210,20 +2597,57 @@ function unpinToast() {
 
 // One ball chip for the HUD's remaining-balls strip: a full-colour disc for
 // 1-8, a white disc with a coloured band for 9-15 (the CSS reads --dc).
+// The 8 is near-black on a near-black panel, so it gets a white centre pip to
+// pick it out of the row — CSS draws it, hence no inline background here (an
+// inline one would win over the rule and paint the pip out).
 function ballDot(id) {
   const d = document.createElement('div');
+  // Snooker balls are plain colours, so the chip is just the ball's colour —
+  // except the black, which borrows the 8's white centre pip to stay visible
+  // against the near-black HUD panel.
+  if (gameMode === 'snooker') {
+    const c = SNK.hex(id);
+    d.className = 'dot' + (id === SNK.BLACK ? ' eight' : '');
+    d.style.background = id === SNK.BLACK ? '' : c;
+    d.style.setProperty('--dc', c);
+    return d;
+  }
   const striped = id > 8;
   const c = BALL_COLORS[striped ? id - 8 : id];
-  d.className = 'dot' + (striped ? ' striped' : '');
-  d.style.background = striped ? '' : c;
+  const styled = striped || id === 8;   // background comes from the stylesheet
+  d.className = 'dot' + (striped ? ' striped' : id === 8 ? ' eight' : '');
+  d.style.background = styled ? '' : c;
   d.style.setProperty('--dc', c);
   return d;
 }
 
+// Snooker's remaining-balls strip: one red chip carrying the count (fifteen
+// separate chips would swamp the card), then whichever colours are still up.
+function snookerDots(dots) {
+  const reds = SNK.REDS.reduce((k, id) => k + (balls[id].potted ? 0 : 1), 0);
+  if (reds > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'redsLeft';
+    wrap.appendChild(ballDot(SNK.REDS[0]));
+    const nEl = document.createElement('span');
+    nEl.textContent = '\u00d7' + reds;
+    wrap.appendChild(nEl);
+    dots.appendChild(wrap);
+  }
+  for (const id of SNK.COLOURS) if (!balls[id].potted) dots.appendChild(ballDot(id));
+}
+
 function updateHUD() {
+  // Snooker's cards are taller (they carry a frame score), so the toast below
+  // them has to drop or the two collide — see body.snookerHud in index.html.
+  document.body.classList.toggle('snookerHud', gameMode === 'snooker');
   // 9-ball has no groups: both players share one rotation, so both cards show
   // the same target and the same balls left on the table.
   const nineTarget = gameMode === '9ball' ? lowestBall() : 0;
+  // Snooker: the ball on belongs to whoever is at the table, so it's shown on
+  // the active card only. Suppressed once the frame is over, when the striker's
+  // target is no longer a thing that exists.
+  const snookerOnBall = gameMode === 'snooker' && state !== S.END ? snookerOn() : null;
   for (let i = 0; i < 2; i++) {
     const card = document.getElementById('card' + i);
     const p = players[i];
@@ -2241,6 +2665,20 @@ function updateHUD() {
     card.classList.toggle('active', i === turn && state !== S.END);
     const dots = card.querySelector('.dots');
     dots.innerHTML = '';
+    const scoreEl = card.querySelector('.pscore');
+
+    // The score line is snooker's alone; the pool games leave it hidden.
+    if (scoreEl) {
+      scoreEl.classList.toggle('hidden', gameMode !== 'snooker');
+      if (gameMode === 'snooker') scoreEl.textContent = snooker.scores[i];
+    }
+
+    if (gameMode === 'snooker') {
+      card.querySelector('.pgroup').textContent =
+        (i === turn && snookerOnBall) ? 'ON: ' + snookerOnBall.label : '';
+      snookerDots(dots);
+      continue;
+    }
 
     if (gameMode === '9ball') {
       card.querySelector('.pgroup').textContent =
@@ -2318,6 +2756,7 @@ function buildSetupUI() {
 // OFFLINE setup toggle: 2-player hot-seat vs. the computer opponent. Re-renders
 // the player cards (seat 2 becomes the CPU) and is read by startMatch().
 function setVsCPU(on) {
+  if (on && gameMode === 'snooker') return; // no computer opponent in snooker yet
   vsCPU = on;
   const pBtn = document.getElementById('vsPlayerBtn'), cBtn = document.getElementById('vsCpuBtn');
   if (pBtn) pBtn.classList.toggle('sel', !on);
@@ -2496,9 +2935,12 @@ canvas.addEventListener('pointerup', e => {
       // If the shooter is down to the 8-ball, placing hands straight over to the
       // pocket-call, which is itself a pinned prompt.
       if (state === S.CALLING) pinToast(`Only the 8-ball left — tap the pocket you'll call`);
+      else if (state === S.NOMINATE) pinToast('Nominate the colour you’re on');
       else toast(`${players[turn].cfg.name}'s shot`);
     } else {
-      toast('Can’t place there — pick an open spot on the felt');
+      toast(gameMode === 'snooker'
+        ? 'The cue ball has to go inside the D'
+        : 'Can’t place there — pick an open spot on the felt');
     }
   } else if (ptr.mode === 'call') {
     if (ptr.moved > 8) { ptr.mode = null; return; } // was an orbit drag, not a tap
@@ -2622,7 +3064,10 @@ function updatePlaceGhost(cx, cy) {
   placeGhost.position.set(x, BALL_Y, z);
   placeGhost.visible = true;
   canvas.classList.add('placing');
-  placeValid = true;
+  // Snooker never gives ball in hand anywhere on the table: the cue ball goes
+  // in the D, whether that's the frame's first stroke, an in-off or a
+  // re-spotted black.
+  placeValid = gameMode !== 'snooker' || SNK.inD({ PW, PH, R }, x, z);
   for (const b of balls) {
     if (b.id === 0 || b.potted) continue;
     if ((b.x - x) ** 2 + (b.z - z) ** 2 < (2 * R * 1.05) ** 2) { placeValid = false; break; }
@@ -2698,9 +3143,27 @@ window.addEventListener('resize', resize);
 
 resize();
 buildSetupUI();
+buildNominate();
 rackBalls();
 updateHUD();
 requestAnimationFrame(frame);
+
+// One snapshot of everything a test harness needs to drive and check the game.
+// Fed to both the #dbg element and window.__poolTest.dump().
+function dumpState() {
+  return {
+    state, turn, game: gameMode,
+    target: gameMode === '9ball' ? lowestBall() : 0,
+    snooker: gameMode === 'snooker'
+      ? { scores: snooker.scores.slice(), phase: snooker.st.phase,
+          nominated: snooker.st.nominated,
+          on: snookerOn().label, onIds: snookerOn().ids }
+      : null,
+    moving: anyMoving(),
+    potted: balls.filter(b => b.potted).map(b => b.id),
+    pos: balls.filter(b => !b.potted).map(b => [b.id, +b.x.toFixed(3), +b.z.toFixed(3)]),
+  };
+}
 
 /* headless-test hooks: ?autostart skips setup, ?autoshot=0.9 fires the break,
    ?game=9ball picks the rule set, ?cpu makes seat 2 the computer (vs-CPU mode),
@@ -2713,6 +3176,11 @@ if (q.has('autostart')) {
   document.getElementById('landingOverlay').classList.add('hidden');
   document.getElementById('modeOverlay').classList.add('hidden');
   if (q.has('cpu')) vsCPU = true;
+  // ?nocpu: hot-seat both seats. A harness driving strokes from outside has to
+  // be the only thing holding the cue — the computer firing its own stroke into
+  // a roll already underway re-launches the cue ball mid-shot and resets
+  // shotEvents with it (see launchCue), which corrupts any recording of it.
+  if (q.has('nocpu')) vsCPU = false;
   if (q.has('botbreak')) forceBotBreak = true; // test: force the computer to break
   if (q.has('botvbot')) bothBotSeats = true; // test: computer plays both seats (self-play stats)
   startMatch();
@@ -2728,6 +3196,10 @@ if (q.has('autostart')) {
     window.__poolTest = {
       aimAt(x, z) { cam.yaw = Math.atan2(-(x - cue.x), -(z - cue.z)); },
       shoot(power) { if (state === S.AIM) fire(Math.max(0.05, Math.min(1, power))); },
+      // A live snapshot of the match, for a harness driving the game from
+      // outside. Same payload as the #dbg element below, but read on demand so
+      // a caller never acts on a state a poll interval out of date.
+      dump: () => dumpState(),
       place(x, z) {
         if (state !== S.PLACING) return false;
         cue.x = x; cue.z = z; cue.vx = cue.vz = 0;
@@ -2735,16 +3207,14 @@ if (q.has('autostart')) {
         unpinToast(); enterAim();
         return true;
       },
+      // Snooker: answer the colour picker (S.NOMINATE) without a click.
+      nominate(id) {
+        if (state !== S.NOMINATE) return false;
+        nominate(id);
+        return state === S.AIM;
+      },
     };
-    setInterval(() => {
-      dbg.textContent = JSON.stringify({
-        state, turn, game: gameMode,
-        target: gameMode === '9ball' ? lowestBall() : 0,
-        moving: anyMoving(),
-        potted: balls.filter(b => b.potted).map(b => b.id),
-        pos: balls.filter(b => !b.potted).map(b => [b.id, +b.x.toFixed(3), +b.z.toFixed(3)]),
-      });
-    }, 250);
+    setInterval(() => { dbg.textContent = JSON.stringify(dumpState()); }, 250);
   }
 }
 

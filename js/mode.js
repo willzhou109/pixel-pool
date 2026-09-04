@@ -1,8 +1,9 @@
 /* Home screen for Pixel Pool — shown after LOG IN or CONTINUE AS GUEST.
  *
  * landing.js hands off here via window.PixelPoolMode.enter(username, isGuest).
- * Full-bleed layout over the dimmed, spinning table: pick a game (only 8-ball
- * exists — the other tabs are "coming soon"), then toggle OFFLINE or ONLINE.
+ * Full-bleed layout over the dimmed, spinning table: pick a game (8-ball,
+ * 9-ball and snooker are playable; the rest are "coming soon"), then toggle
+ * OFFLINE or ONLINE.
  * The two live inline on this screen — no page navigation: OFFLINE shows the
  * local two-player setup (#homeOffline, players + PLAY, owned by game.js) and
  * ONLINE shows matchmaking (#homeOnline, owned by lobby.js). This module just
@@ -48,11 +49,11 @@
   const authToken = () => (window.PixelPoolAuth ? window.PixelPoolAuth.getToken() : null);
 
   const GAME_NAMES = { '8ball': '8-BALL', '9ball': '9-BALL', '10ball': '10-BALL', snooker: 'SNOOKER' };
-  // Games with rules behind them (game.js + js/nineball.js). The rest of the
-  // tabs are placeholders that just say "coming soon".
-  const PLAYABLE = { '8ball': true, '9ball': true };
-  // 9-ball is local two-player only so far: matchmaking has no game type on the
-  // wire, and the computer opponent only knows 8-ball.
+  // Games with rules behind them (game.js + js/nineball.js + js/snooker.js).
+  // The rest of the tabs are placeholders that just say "coming soon".
+  const PLAYABLE = { '8ball': true, '9ball': true, snooker: true };
+  // 9-ball and snooker are local two-player only so far: matchmaking has no
+  // game type on the wire, and the computer opponent only knows 8-ball.
   const ONLINE_GAMES = { '8ball': true };
 
   let guest = false;
@@ -109,7 +110,7 @@
   }
 
   /* ------------------------------ game tabs ------------------------------ */
-  // 8-ball and 9-ball are playable; the rest flash a "coming soon" note and
+  // The games in PLAYABLE are live; the rest flash a "coming soon" note and
   // leave the selection where it was. Picking a game tells game.js which rule
   // set the next match runs (and re-racks the showcase table behind the menu).
   function setGame(id) {
@@ -126,10 +127,10 @@
     }
     setGame(id);
     if (!note) return;
-    // Selecting a game that can't go online yet: say so, and drop back to the
-    // offline panel rather than leaving a dead ONLINE selection showing.
+    // Selecting a game that can't go online yet: drop back to the offline
+    // panel rather than leaving a dead ONLINE selection showing.
     if (!ONLINE_GAMES[id]) {
-      note.textContent = GAME_NAMES[id] + ' IS TWO PLAYERS AT ONE SCREEN FOR NOW.';
+      note.textContent = '';
       if (mode === 'online') {
         setMode('offline');
         if (Lobby()) Lobby().suspend();

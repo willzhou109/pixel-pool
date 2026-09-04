@@ -10,6 +10,9 @@
  */
 'use strict';
 
+// Load .env before anything that reads process.env at require time.
+require('./env');
+
 // node:sqlite is still flagged "experimental" and prints a startup warning.
 // It's stable enough for this; silence just that one warning to keep logs clean.
 const _emit = process.emit;
@@ -29,6 +32,7 @@ const avatar = require('./avatar');
 const profiles = require('./profiles');
 const friends = require('./friends');
 const chat = require('./chat');
+const commentaryLive = require('./commentary/live');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = path.resolve(__dirname, '..'); // project root holds index.html, js/, lib/
@@ -72,12 +76,14 @@ function sendJson(res, status, obj) {
   res.end(body);
 }
 
-function readJsonBody(req) {
+// `limit` defaults to 10KB — plenty for auth/friend payloads. The recap
+// endpoint passes a larger cap because it carries a whole match's shot log.
+function readJsonBody(req, limit = 10_000) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 10_000) { reject(new Error('Body too large')); req.destroy(); }
+      if (body.length > limit) { reject(new Error('Body too large')); req.destroy(); }
     });
     req.on('end', () => {
       try { resolve(body ? JSON.parse(body) : {}); }
@@ -125,6 +131,17 @@ async function handleApi(req, res, pathname, searchParams) {
       console.error('[api] google auth error:', e);
       return sendJson(res, 500, { error: 'Server error. Try again.' });
     }
+  }
+
+  // On-demand recap for a game with no server-side match row — i.e. every
+  // OFFLINE game (hot-seat, vs-computer). Sign-in only and rate limited: it
+  // spends API credits per call. See server/commentary/live.js.
+  if (pathname === '/api/commentary' && req.method === 'POST') {
+    let body;
+    try { body = await readJsonBody(req, 200_000); }
+    catch { return sendJson(res, 400, { error: 'Bad request.' }); }
+    const { status, body: out } = await commentaryLive.recap(bearer(req), body, ip);
+    return sendJson(res, status, out);
   }
 
   if (pathname === '/api/me' && req.method === 'GET') {
@@ -253,6 +270,15 @@ const server = http.createServer((req, res) => {
 // http.createServer (so our request handler above is registered first —
 // Socket.IO preserves it for non-/socket.io/ requests) and before listen().
 require('./realtime').initRealtime(server);
+
+// Drain the AI-recap queue in this process too, unless a standalone worker is
+// running (WORKER_MODE=external + server/worker.js). No-op without Redis —
+// there, commentary/index.js generates in-process off a timer instead.
+const commentary = require('./commentary');
+if (process.env.WORKER_MODE !== 'external') commentary.startWorker();
+if (!commentary.enabled()) {
+  console.warn('[commentary] ANTHROPIC_API_KEY not set — AI match recaps are off.');
+}
 
 server.listen(PORT, () => {
   console.log(`Pixel Pool Online running at http://localhost:${PORT}`);
