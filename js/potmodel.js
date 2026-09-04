@@ -1,11 +1,16 @@
 /* Shot-outcome model for Pixel Pool — "how likely is this pot?"
  *
- * js/bot.js has always scored a pot with a hand-tuned line (`hardness`) and
- * guessed its own accuracy with another (`aimSigma`). Both stand in for one
- * measurable thing: the MAKE WINDOW, the half-width in radians of the band of
- * aim errors that still drops the ball. This module carries a small network,
- * trained on that window as measured against the real simulator, and answers
- * the question the hand-tuned lines were approximating.
+ * js/bot.js scores a pot with a hand-tuned line (`hardness`) standing in for
+ * something measurable: the MAKE WINDOW, the half-width in radians of the band
+ * of aim errors that still drops the ball. This module carries a small network
+ * trained on that window as measured against the real simulator.
+ *
+ * game.js already computes the window EXACTLY for the one shot the bot commits
+ * to — tuneAim's fan search, which is what sets the bot's wobble. What it
+ * cannot do is compute it for the hundreds of candidates weighed while
+ * CHOOSING a shot: a few hundred raycasts each is far too slow inside the
+ * position lookahead. So this is a distillation — the expensive exact answer,
+ * made cheap enough to ask everywhere.
  *
  * Two heads, because the label is two questions:
  *     makeable  is there any aim at all that pots this at this speed?
@@ -73,6 +78,11 @@
   // Adopt an already-parsed blob (Node tooling, tests) instead of fetching.
   function use(blob) { net = blob; return net; }
 
+  /* The map from log(effective window) onto js/bot.js's legacy `hardness`
+     scale, fitted at training time. Lets the bot swap in a calibrated number
+     without any of its tuned thresholds changing meaning. */
+  function hardnessScale() { return net ? net.hardnessScale : null; }
+
   /* One dense layer: y = act(x . W + b), W stored as [in][out]. */
   function dense(x, layer) {
     const W = layer.w, b = layer.b, out = new Array(b.length);
@@ -117,5 +127,5 @@
     return p.makeable * erf(p.w / (sigma * Math.SQRT2));
   }
 
-  return { load, use, ready, predict, potProbability, erf };
+  return { load, use, ready, predict, potProbability, hardnessScale, erf };
 });

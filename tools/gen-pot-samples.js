@@ -213,22 +213,18 @@ while (written < WANT) {
   const win = makeWindow(layout, cand, speed);
   sims += win.sims;
 
-  // Nearest neighbour to the two shot lines: how much traffic the shot has to
-  // thread. potCandidates already rejects fully blocked paths, so what is left
-  // is the margin, and that is what decides whether a near-miss still drops.
-  const clearance = minClearance(layout, cue, cand);
-
-  out.write(JSON.stringify({
-    // features — all of them available to the bot at decision time
-    cosCut: r6(cand.cosCut), dCue: r6(cand.dCue), dObj: r6(cand.dObj),
-    power: r6(power), side: cand.pocket >= 4 ? 1 : 0,
-    railT: r6(railDist(cand.from)), railC: r6(railDist(cue)),
-    clearCue: r6(clearance.cue), clearObj: r6(clearance.obj),
-    // labels
-    w: r6(win.w), potted: win.w > 0 ? 1 : 0,
-    // kept for reference / later models, not fed to this one
-    hardness: r6(cand.hardness), pocket: cand.pocket,
-  }) + '\n');
+  // Built by js/bot.js, not here: the model has to be trained on exactly the
+  // vector the bot will hand it at decision time.
+  const f = BOT.potFeatures(ctx, cue, cand, power, cand.gapCue, cand.gapObj);
+  const row = {};
+  for (const k of Object.keys(f)) row[k] = r6(f[k]);
+  row.w = r6(win.w);                       // label: make-window half-width
+  row.potted = win.w > 0 ? 1 : 0;
+  // The hand-tuned line, as the baseline to beat. geoHardness is always the
+  // original formula even when a model is loaded, so this stays a fair contest.
+  row.hardness = r6(cand.geoHardness);
+  row.pocket = cand.pocket;
+  out.write(JSON.stringify(row) + '\n');
   written++;
   if (written % 250 === 0) {
     const rate = written / ((Date.now() - t0) / 1000);
@@ -247,36 +243,5 @@ console.log(`  ${sims} shot simulations in ${secs.toFixed(1)}s (${(sims / secs).
 
 function r6(v) { return Math.round(v * 1e6) / 1e6; }
 
-// Distance from a ball to the nearest cushion, in ball radii — the bot's
-// `railHug` is a step function of this, so give the model the real number.
-function railDist(p) {
-  return Math.min(CFG.LIMX - Math.abs(p.x), CFG.LIMZ - Math.abs(p.z)) / CFG.R;
-}
-
-// Tightest gap any other ball leaves against the cue's line to the ghost and
-// the object's line to the pocket, in ball radii (capped — past a few radii it
-// stops mattering).
-function minClearance(layout, cue, cand) {
-  const R = CFG.R, P = CFG.POCKETS[cand.pocket];
-  // The ghost-ball centre: one ball diameter back from the object along the
-  // line to the pocket — where the cue ball has to arrive. Same construction
-  // potCandidates uses.
-  const ol = Math.hypot(P.x - cand.from.x, P.z - cand.from.z) || 1;
-  const g = {
-    x: cand.from.x - (P.x - cand.from.x) / ol * 2 * R,
-    z: cand.from.z - (P.z - cand.from.z) / ol * 2 * R,
-  };
-  const gap = (a, b, skip) => {
-    let m = Infinity;
-    const dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz) || 1;
-    const ux = dx / len, uz = dz / len;
-    for (const o of layout) {
-      if (skip.includes(o.id)) continue;
-      const t = (o.x - a.x) * ux + (o.z - a.z) * uz;
-      if (t <= 0 || t >= len) continue;
-      m = Math.min(m, Math.hypot(o.x - (a.x + ux * t), o.z - (a.z + uz * t)));
-    }
-    return Math.min(m / R, 8);                // 8 radii clear is as good as infinite
-  };
-  return { cue: gap(cue, g, [0, cand.target]), obj: gap(cand.from, P, [cand.target, 0]) };
-}
+// Feature construction and the clearance walk both live in js/bot.js now —
+// see potFeatures/pathGap there. Nothing table-shaped is duplicated here.

@@ -99,12 +99,72 @@
   }
 
   // Is any ball (other than ids in `ignore`) within `clear` of segment a→b?
-  function pathBlocked(a, b, balls, ignore, clear) {
+  // Tightest gap any ball leaves against the segment a->b. pathBlocked is just
+  // this with a threshold, but the shot-outcome model wants the margin itself —
+  // how much traffic a shot threads decides whether a near-miss still drops —
+  // so both come out of a single walk rather than two.
+  function pathGap(a, b, balls, ignore) {
+    let m = Infinity;
     for (const o of balls) {
       if (ignore.indexOf(o.id) !== -1) continue;
-      if (distToSeg(o, a, b) < clear) return true;
+      const d = distToSeg(o, a, b);
+      if (d < m) m = d;
     }
-    return false;
+    return m;
+  }
+
+  function pathBlocked(a, b, balls, ignore, clear) {
+    return pathGap(a, b, balls, ignore) < clear;
+  }
+
+  // Distance from a point to the nearest cushion, in ball radii. `railHug` is a
+  // step function of this; the model gets the real number.
+  function railDist(ctx, p) {
+    return Math.min(ctx.LIMX - Math.abs(p.x), ctx.LIMZ - Math.abs(p.z)) / ctx.R;
+  }
+
+  /* ------------------------- shot-outcome model -------------------------- */
+  // js/potmodel.js, when it has loaded. Everything here falls back to the
+  // hand-tuned `hardness` line without it — which is also how the offline tools
+  // run, since tools/gen-pot-samples.js loads this file with no model present.
+  function model() {
+    const M = typeof window !== 'undefined' && window.PoolPotModel;
+    return M && M.ready() ? M : null;
+  }
+
+  // The feature vector js/potmodel.json was trained on. Built HERE, and called
+  // by tools/gen-pot-samples.js through the export below, so the numbers the
+  // model is trained on and the numbers it is asked about cannot drift apart.
+  // `gapCue`/`gapObj` are the raw world-unit clearances potCandidates already
+  // measured; the model wants them in ball radii, capped where more room stops
+  // making any difference.
+  function potFeatures(ctx, cuePos, cand, power, gapCue, gapObj) {
+    const cap = g => Math.min(g / ctx.R, 8);
+    return {
+      cosCut: cand.cosCut, dCue: cand.dCue, dObj: cand.dObj,
+      power, side: cand.pocket >= 4 ? 1 : 0,
+      railT: railDist(ctx, cand.from), railC: railDist(ctx, cuePos),
+      clearCue: cap(gapCue), clearObj: cap(gapObj),
+    };
+  }
+
+  // The model's verdict, expressed on the SAME scale as the hand-tuned
+  // `hardness` so every constant tuned against it (MAX_HARDNESS, NO_SHOT,
+  // BANK_COST, POS_WEIGHT) keeps its meaning. tools/train_pot.py fits that
+  // mapping from the training set and ships it in the blob.
+  //
+  // The effective window folds in the chance the shot is potable at all:
+  // P(pot) is proportional to makeable * w for the tight windows where the
+  // choice is actually difficult, so makeable*w is the right thing to rank on.
+  function modelHardness(M, ctx, cuePos, cand, gapCue, gapObj) {
+    const scale = M.hardnessScale && M.hardnessScale();
+    if (!scale) return null;
+    const p = M.predict(potFeatures(ctx, cuePos, cand, powerFor(cand), gapCue, gapObj));
+    if (!p) return null;
+    const wEff = p.makeable * p.w;
+    if (!(wEff > 0)) return NO_SHOT;
+    const h = scale.a + scale.b * Math.log(wEff);
+    return Math.max(0, Math.min(NO_SHOT, h));
   }
 
   /* Is this shot for the match? The 8 in 8-ball, the 9 in 9-ball. Nothing to
@@ -150,14 +210,30 @@
         if (cosCut < 0.15) continue;                    // cut thinner than ~81°: skip
         const dCue = len(toGhost);
         const dObj = len(sub(P, T));
-        if (pathBlocked(cuePos, ghost, balls, [T.id], clear)) continue; // cue path
-        if (pathBlocked(T, P, balls, [T.id], clear)) continue;          // object path
+        const gapCue = pathGap(cuePos, ghost, balls, [T.id]);
+        if (gapCue < clear) continue;                                   // cue path
+        const gapObj = pathGap(T, P, balls, [T.id]);
+        if (gapObj < clear) continue;                                   // object path
         const railHug = (Math.abs(T.z) > LIMZ - 3 * R || Math.abs(T.x) > LIMX - 3 * R) ? 0.3 : 0;
-        const hardness = (1 - cosCut) * 2.4 + (dCue + dObj) * 0.55 + railHug;
-        out.push({
-          pocket: pi, dir, yaw: yawFor(dir), hardness, dObj, dCue, cosCut,
+        // The original hand-tuned line. Kept unconditionally: it is the
+        // fallback when no model is loaded, and tools/gen-pot-samples.js
+        // records it as the baseline the model has to beat.
+        const geoHardness = (1 - cosCut) * 2.4 + (dCue + dObj) * 0.55 + railHug;
+        const cand = {
+          pocket: pi, dir, yaw: yawFor(dir), hardness: geoHardness, geoHardness,
+          dObj, dCue, cosCut, gapCue, gapObj,
           target: T.id, from: { x: T.x, z: T.z },
-        });
+        };
+        // With a model loaded, `hardness` becomes its calibrated estimate of the
+        // same thing the line was guessing at. Everything downstream — the sort,
+        // easiestPot, the MAX_HARDNESS gate, bestPot's scoring — then runs on the
+        // better number without knowing anything changed.
+        const M = model();
+        if (M) {
+          const h = modelHardness(M, ctx, cuePos, cand, gapCue, gapObj);
+          if (h !== null) cand.hardness = h;
+        }
+        out.push(cand);
       }
     }
     return out;
@@ -559,8 +635,18 @@
   // tools in tools/: a shot-outcome model has to be trained on EXACTLY the
   // features the bot will feed it at run time, so the generator calls the same
   // candidate enumeration rather than reimplementing the geometry and drifting.
+  // Pull the weights in the background, in a page. Until they land — or if they
+  // never do, for anyone serving the game without the blob — every path above
+  // falls back to the hand-tuned line. The offline tools in tools/ hand the
+  // blob over with PoolPotModel.use() instead, so they must not fetch here.
+  if (typeof document !== 'undefined' && typeof fetch === 'function'
+      && window.PoolPotModel) window.PoolPotModel.load();
+
   window.PoolBot = {
     chooseShot,
     potCandidates, legalTargets, powerFor, aimSigma,
+    // Feature construction, for tools/gen-pot-samples.js — same code path the
+    // bot uses, so training data and inference can't describe different things.
+    potFeatures, railDist, pathGap,
   };
 })();

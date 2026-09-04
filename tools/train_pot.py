@@ -116,6 +116,7 @@ def main():
     x, makeable, logw, hardness = load(args.data)
     print(f"{len(x)} samples, {int(makeable.sum())} makeable "
           f"({100 * makeable.mean():.1f}%)")
+    on_all = makeable == 1
 
     # Split before normalising, so validation statistics stay honest.
     idx = np.random.default_rng(args.seed).permutation(len(x))
@@ -178,6 +179,25 @@ def main():
             print(f"  {lo:.1f}-{hi:.1f}: predicted {pm[sel].mean():.3f}  "
                   f"actual {makeable[va][sel].mean():.3f}  (n={int(sel.sum())})")
 
+    # --------------------------------------------------- legacy hardness scale
+    # js/bot.js is tuned against `hardness` — MAX_HARDNESS, NO_SHOT, BANK_COST,
+    # POS_WEIGHT are all in its units. So the model's verdict is mapped onto the
+    # same scale and every one of those constants keeps its meaning.
+    #
+    # This matches the DISTRIBUTION (mean and spread), not the conditional mean:
+    # a least-squares fit would regress toward the middle and compress the range,
+    # which would quietly change what fraction of shots the MAX_HARDNESS gate
+    # rejects. b is negative — a wider window is an easier shot.
+    lw_on, h_on = logw[on_all], hardness[on_all]
+    b = -float(h_on.std() / lw_on.std())
+    a = float(h_on.mean() - b * lw_on.mean())
+    mapped = np.clip(a + b * lw_on, 0, 6.0)
+    print(f"\nhardness scale: h = {a:.4f} + {b:.4f} * log(w)")
+    print(f"  legacy hardness : mean {h_on.mean():.2f} sd {h_on.std():.2f}, "
+          f"{100 * (h_on > 4.2).mean():.1f}% above MAX_HARDNESS")
+    print(f"  mapped from w   : mean {mapped.mean():.2f} sd {mapped.std():.2f}, "
+          f"{100 * (mapped > 4.2).mean():.1f}% above MAX_HARDNESS")
+
     # ---------------------------------------------------------------- export
     dense = [l for l in model.layers if isinstance(l, keras.layers.Dense)]
     blob = {
@@ -186,6 +206,8 @@ def main():
         "mean": mean.tolist(),
         "std": std.tolist(),
         "logWFloor": LOG_W_FLOOR,
+        # Maps log(effective window) onto js/bot.js's legacy `hardness` scale.
+        "hardnessScale": {"a": a, "b": b},
         "layers": [
             {
                 "name": l.name,
