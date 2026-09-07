@@ -47,6 +47,8 @@ the simulator**, which is unlimited and fully labelled.
 | `train_pot.py` | Two-head Keras model → `js/potmodel.json` |
 | `check-potmodel.js` | Proves the hand-written JS forward pass matches Keras |
 | `eval-potmodel.js` | Scores model vs heuristic on held-out **real** layouts |
+| `fit-power.js` | Fits `bot.js`'s `POWER_FIT` by measuring minimum potting power |
+| `eval-position.js` | Plays the bot's own shots and scores where the cue finishes |
 
 ## Run it
 
@@ -80,6 +82,23 @@ node tools/eval-potmodel.js --game=8ball --layouts=200
 `.venv/` and the generated data are gitignored; the trained weights
 (`js/potmodel.json`) are committed, because they ship to the browser.
 
+## Changing the cloth
+
+`FRIC_C`/`FRIC_L` in `game.js` decide how far a stroke carries, so two things
+downstream are fitted to them and go stale together:
+
+1. **`POWER_FIT` in `js/bot.js`** — `powerFor()`'s coefficients. Refit with
+   `node tools/fit-power.js`, then check the result with `tools/eval-position.js`.
+   Left stale, the bot overhits everything: after the 0.30 -> 0.195 change the
+   shipped formula was striking at ~2.9x the power actually needed to pot.
+2. **The shot-outcome model** — make windows are measured under the physics of
+   the day. Re-dump the configs and rerun steps 2-3 above.
+
+Worth knowing that `powerFor` was never a tight fit — it was ~2.2x the minimum
+even before the friction change, because it is the *centre* of `planShot`'s
+`POWER_TRIES` search rather than a target. What matters is that the search range
+still brackets the useful region.
+
 ## Two traps
 
 **Anything driving the game from outside must be the only thing holding the
@@ -109,10 +128,10 @@ The change is in the *ranking*, not in how often the bot bails to a safety.
 
 | | learned | hand-tuned `hardness` |
 |---|---|---|
-| ranks difficulty, random scatters (Spearman vs log w) | **0.855** | 0.636 |
-| ranks difficulty, **held-out real layouts** | **0.775** | 0.600 |
-| picks the widest window on the table (top-1) | **75.5%** | 62.3% |
-| "is it makeable" (AUC) | **0.900** | 0.863 |
+| ranks difficulty, random scatters (Spearman vs log w) | **0.855** | 0.651 |
+| ranks difficulty, **held-out real layouts** | **0.818** | 0.592 |
+| picks the widest window on the table (top-1) | **83.0%** | 53.2% |
+| "is it makeable" (AUC) | **0.880** | 0.841 |
 
 Held-out numbers come from `tools/eval-potmodel.js`, run on browser-recorded
 layouts the model never saw — random scatters cover the table, but the bot only

@@ -113,8 +113,14 @@ function profileFor(game) { return game === 'snooker' ? 'snooker' : 'pool'; }
 const REST_BALL = 0.95;       // ball-ball restitution
 const REST_CUSH = 0.72;       // cushion restitution
 const CUSH_GRIP = 0.14;       // tangential speed loss on cushion contact
-const FRIC_C = 0.30;          // constant rolling deceleration (u/s^2)
-const FRIC_L = 0.30;          // linear (speed-proportional) drag (1/s)
+// Cloth friction. Both terms were halved-and-a-bit (x0.65) from 0.30 to open the
+// table up: a medium stroke now rolls ~2.5 table lengths instead of ~1.6, which
+// is about right for real cloth. Raising these tightens the table again.
+// NOTE: js/bot.js's powerFor() is fitted against these — see tools/fit-power.js —
+// and the shot-outcome model's training data is generated under them, so both
+// need regenerating if they change again.
+const FRIC_C = 0.195;         // constant rolling deceleration (u/s^2)
+const FRIC_L = 0.195;         // linear (speed-proportional) drag (1/s)
 const STOP_V = 0.018;         // below this, a ball is stopped
 const MAX_V  = 5.0;           // full-power cue-ball speed
 const BREAK_BOOST = 1.9;      // extra cue speed on the opening break

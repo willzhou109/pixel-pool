@@ -81,6 +81,19 @@
   // soft end is what buys position (a stunned cue ball stays put); every option
   // is verified to still sink the ball before it's allowed to win.
   const POWER_TRIES = [0.85, 1, 1.25, 1.6];
+  // Stroke-strength coefficients. These are CLOTH-DEPENDENT — they encode how
+  // far a given speed carries — so they are fitted against the simulator rather
+  // than guessed: see tools/fit-power.js, and refit whenever FRIC_C/FRIC_L in
+  // game.js change. The fit targets the minimum power that still pots, times a
+  // margin: powerFor is the centre of the POWER_TRIES search, and it is also
+  // used raw when the position planner doesn't get to run, so it has to be a
+  // stroke that reliably arrives rather than one that only just does.
+  // The x2.25 margin over the fitted minimum is itself measured, not picked:
+  // tools/eval-position.js swept it and this is where the cue ball stops
+  // finishing on a cushion (2.2% vs 3.1% for the pre-fit formula) without
+  // costing any potting. It also hits ~24% softer for the same results, which
+  // is the overhitting the friction change introduced.
+  const POWER_FIT = { base: 0.0511, cue: 0.2032, cut: 0.3346, min: 0.24, max: 0.9 };
 
   const sub = (a, b) => ({ x: a.x - b.x, z: a.z - b.z });
   const len = v => Math.hypot(v.x, v.z);
@@ -331,10 +344,11 @@
   // A banked ball also loses speed at the cushion (the normal component is cut
   // to REST), so it needs a firmer stroke over its longer path.
   function powerFor(shot, viaRail) {
+    const F = POWER_FIT;
     const cutBoost = shot.dObj / Math.max(shot.cosCut, 0.35);
-    let p = 0.30 + 0.16 * shot.dCue + 0.26 * cutBoost;
+    let p = F.base + F.cue * shot.dCue + F.cut * cutBoost;
     if (viaRail) p *= 1.3;
-    return Math.max(0.24, Math.min(viaRail ? 1 : 0.9, p));
+    return Math.max(F.min, Math.min(viaRail ? 1 : F.max, p));
   }
 
   // The table descriptor js/banks.js and js/position.js both take. The trailing
@@ -648,5 +662,8 @@
     // Feature construction, for tools/gen-pot-samples.js — same code path the
     // bot uses, so training data and inference can't describe different things.
     potFeatures, railDist, pathGap,
+    // Mutable, so tools/eval-position.js can A/B a candidate fit against the
+    // shipped one without editing this file.
+    POWER_FIT,
   };
 })();
