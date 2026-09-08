@@ -55,7 +55,16 @@ const MIME = {
 };
 
 function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(pathname);
+  let rel;
+  try {
+    rel = decodeURIComponent(pathname);
+  } catch {
+    // A malformed percent-escape ("/%", "/%ZZ") makes decodeURIComponent throw
+    // URIError. Uncaught, that propagates out of the request handler and exits
+    // the process, so a single bad URL would take the whole site down.
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    return res.end('Bad request');
+  }
   if (rel === '/' || rel === '') rel = '/index.html';
   const filePath = path.join(ROOT, rel);
   // Path-traversal guard: the resolved path must stay inside ROOT.
@@ -260,7 +269,21 @@ async function handleApi(req, res, pathname, searchParams) {
 
 /* -------------------------------- server --------------------------------- */
 const server = http.createServer((req, res) => {
-  const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+  // req.url is origin-form ("/path?query"), and it must NOT be parsed as
+  // `new URL(req.url, base)`. A request line of "//" is read as a
+  // protocol-relative URL with an empty authority and THROWS, and an uncaught
+  // throw in this handler kills the process outright — `curl http://host//`
+  // was enough to take the server down. Prefixing the origin instead keeps
+  // "//" an ordinary path. The catch then covers absolute-form request lines
+  // and other junk, which are a client error, not a reason to exit.
+  let url;
+  try {
+    url = new URL(`http://localhost${req.url}`);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    return res.end('Bad request');
+  }
+  const { pathname, searchParams } = url;
   if (pathname.startsWith('/api/')) return handleApi(req, res, pathname, searchParams);
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end('Method not allowed'); }
   return serveStatic(req, res, pathname);
