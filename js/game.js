@@ -1777,7 +1777,16 @@ function lerpAngle(a, b, t) {
 // Compact table layout for the recap play-by-play (js/stats.js): one row per
 // ball, same shape as serializeState()'s ball list.
 function statsLayout() {
-  return balls.map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]);
+  // Only the balls this rack actually uses. The mesh pool is sized for the
+  // biggest game (snooker: cue + 15 reds + 6 colours), so a pool game leaves
+  // ids 16-21 parked at the origin flagged potted. Logging those made an
+  // 8-ball layout indistinguishable from a snooker one to anything reading the
+  // ball ids — js/playbyplay.js inferred the rule set exactly that way and so
+  // drew every object ball as a snooker red.
+  const maxId = gameMode === 'snooker' ? 21 : 15;
+  return balls
+    .filter(b => b.id <= maxId)
+    .map(b => [b.id, round4(b.x), round4(b.z), b.potted ? 1 : 0]);
 }
 
 /* --------------------------- snooker: nominate -------------------------- */

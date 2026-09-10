@@ -34,12 +34,22 @@
     wrongPot: 'FOUL: POTTED A BALL THAT WASN’T ON', // snooker only
   };
 
-  // A snooker frame is the only game whose layouts carry ball ids above 15 (the
-  // six colours), so the board can tell which palette to draw from the log
-  // itself rather than being told the rule set.
   const SNK = () => window.PoolSnooker;
-  function isSnookerLayout(layout) {
-    return !!SNK() && layout.some(row => row[0] > 15);
+
+  // Whether to draw a stroke on snooker's bed and palette. Prefer being TOLD
+  // (`game`), because guessing from the ball ids is what broke this: the id
+  // ranges overlap — snooker's reds are 1-15, pool's solids and stripes are
+  // 1-15 too — so the only distinguishing ids are the colours at 16-21, and
+  // pool logs used to carry those as parked, potted phantoms. Every 8-ball
+  // recap was therefore drawn as snooker, i.e. entirely red.
+  //
+  // The fallback covers stored matches, which never persisted a rule set (the
+  // `matches` table has no game column). It ignores potted rows, so the
+  // phantoms in already-stored logs can't trigger it either.
+  function useSnooker(layout, game) {
+    if (!SNK() || !layout) return false;
+    if (game) return game === 'snooker';
+    return layout.some(row => row[0] > 15 && !row[3]);
   }
 
   /* ------------------------------ board draw ------------------------------ */
@@ -47,9 +57,8 @@
   // Internal resolution of one mini board; CSS scales it to half the row.
   const BW = 380, BH = 210, PAD = 16;
 
-  function drawBoard(cv, layout, dir) {
+  function drawBoard(cv, layout, dir, snooker) {
     const ctx = cv.getContext('2d');
-    const snooker = !!layout && isSnookerLayout(layout);
     const { PW, PH, R } = BEDS[snooker ? 'snooker' : 'pool'];
     const s = (BW - 2 * PAD) / (2 * PW); // world units -> px (same for both axes)
     const px = x => PAD + (x + PW) * s;
@@ -162,7 +171,7 @@
   // Draw a shot log into `wrap` as turn-by-turn before/after board pairs.
   // Also used by js/history.js for the LAYOUT tab of a stored match, where the
   // log comes from the server instead of the live MatchStats module.
-  function renderLog(wrap, log, names) {
+  function renderLog(wrap, log, names, game) {
     wrap.innerHTML = '';
     if (!log.length) {
       wrap.appendChild(el('div', 'pbpCaption', 'NO SHOTS RECORDED.'));
@@ -181,7 +190,7 @@
       for (const [layout, dir] of [[shot.before, shot.dir], [shot.after, null]]) {
         const cv = document.createElement('canvas');
         cv.width = BW; cv.height = BH;
-        drawBoard(cv, layout, dir);
+        drawBoard(cv, layout, dir, useSnooker(layout, game));
         row.appendChild(cv);
       }
       wrap.appendChild(row);
@@ -191,8 +200,8 @@
   function render() {
     const wrap = $('recapLayout');
     if (!wrap || !window.MatchStats) return;
-    const { log, names } = window.MatchStats.playByPlay();
-    renderLog(wrap, log, names);
+    const { log, names, game } = window.MatchStats.playByPlay();
+    renderLog(wrap, log, names, game);
   }
 
   /* ------------------------------ tab wiring ------------------------------ */

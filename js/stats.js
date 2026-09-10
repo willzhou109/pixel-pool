@@ -280,7 +280,14 @@
   // stats render identically to the live end-of-game recap.
   window.MatchStats = {
     begin, beginShot, recordShot, snapshot, applyRemote, finalize,
-    playByPlay: () => ({ log, names }),
+    // `game` lets js/playbyplay.js pick the right bed and palette instead of
+    // inferring it from ball ids, which pool and snooker share. Read live, the
+    // same way finalize() does — a stored match has no rule set to report and
+    // relies on the renderer's fallback.
+    playByPlay: () => ({
+      log, names,
+      game: window.PoolMatch ? window.PoolMatch.game() : null,
+    }),
     renderStatsTable, fmtDur,
   };
 })();
