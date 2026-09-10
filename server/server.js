@@ -292,13 +292,13 @@ const server = http.createServer((req, res) => {
 // Attach the Socket.IO real-time layer to this same server. Done AFTER
 // http.createServer (so our request handler above is registered first —
 // Socket.IO preserves it for non-/socket.io/ requests) and before listen().
-require('./realtime').initRealtime(server);
+const io = require('./realtime').initRealtime(server);
 
 // Drain the AI-recap queue in this process too, unless a standalone worker is
 // running (WORKER_MODE=external + server/worker.js). No-op without Redis —
 // there, commentary/index.js generates in-process off a timer instead.
 const commentary = require('./commentary');
-if (process.env.WORKER_MODE !== 'external') commentary.startWorker();
+const worker = process.env.WORKER_MODE !== 'external' ? commentary.startWorker() : null;
 if (!commentary.enabled()) {
   console.warn('[commentary] ANTHROPIC_API_KEY not set — AI match recaps are off.');
 }
@@ -306,3 +306,53 @@ if (!commentary.enabled()) {
 server.listen(PORT, () => {
   console.log(`Pixel Pool Online running at http://localhost:${PORT}`);
 });
+
+/* ---------------------------- graceful shutdown ---------------------------
+ * Railway, Docker and Ctrl-C all ask a process to stop with SIGTERM, and
+ * Node's default action for it is to die on the spot. Two things go wrong
+ * when it does. Open sockets are severed with no close frame, so a live match
+ * freezes for both players instead of telling them to reconnect. And npm --
+ * the parent process, since `start` is `node server/server.js` -- reports the
+ * signal exit as a failed command, which is what fills the deploy logs with a
+ * block of "npm error" lines on every redeploy.
+ *
+ * Neither is a real fault, but logs that cry error when nothing is wrong are
+ * worse than quiet ones, so take the signal deliberately and exit 0.
+ */
+let shuttingDown = false;
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, async () => {
+    if (shuttingDown) return;            // a second signal must not re-enter
+    shuttingDown = true;
+    console.log(`[server] ${sig} received - shutting down`);
+
+    // Nothing below may hang indefinitely: the platform follows SIGTERM with
+    // an unblockable SIGKILL once its grace period is up, and exiting cleanly
+    // a moment early beats being killed in the middle of a write.
+    const giveUp = setTimeout(() => {
+      console.warn('[server] shutdown timed out - exiting anyway');
+      process.exit(0);
+    }, 8000);
+    giveUp.unref();
+
+    try {
+      // Tell clients to reconnect BEFORE the transport goes away, so the front
+      // end sees a disconnect it can explain rather than a socket that just
+      // stops answering.
+      io.disconnectSockets(true);
+      await new Promise(done => io.close(() => done()));
+      // io.close() also closes the HTTP server it was attached to, so this is
+      // belt and braces -- and a no-op if that already happened. Idle
+      // keep-alive sockets would otherwise hold the close open.
+      server.closeIdleConnections();
+      await new Promise(done => server.close(() => done()));
+      if (worker) await worker.close();  // null unless BullMQ/Redis is configured
+    } catch (e) {
+      console.warn('[server] shutdown error:', e.message);
+    }
+
+    clearTimeout(giveUp);
+    console.log('[server] closed cleanly');
+    process.exit(0);
+  });
+}
