@@ -68,11 +68,19 @@ let PW, PH, R, BALL_Y, LIMX, LIMZ, CORNER_GAP, SIDE_GAP, START_RADIUS;
 // snooker ball — barely two thirds the size — would sit lower than the cushion
 // nose and vanish behind the rails from the shooting camera.
 let BALL_SCALE = 1;
+// Cushion and rail dimensions, and the world height of the rail top. All sized
+// off the ball via BALL_SCALE in applyTableProfile, and up here rather than
+// inside buildTable() because the visible pocket mouths are derived from them.
+let CUSH_H, CUSH_DEPTH, RAIL_W, RAIL_H, RAIL_TOP;
 // Pocket cups: indices 0-3 are the corners, 4-5 the sides — physicsStep gates
 // side-pocket capture on `pi >= 4`, and 8-ball's called pocket travels over the
 // wire as an index, so the ORDER here is load-bearing. Rewritten in place so
 // modules that captured the array (js/aimassist.js) keep pointing at it.
 const POCKETS = [];
+// The pocket mouths you can SEE, in the same index order — a different set of
+// circles from POCKETS above, and deliberately so: see js/pockets.js. Rewritten
+// in place alongside POCKETS.
+const HOLES = [];
 let tableProfile = '';
 // The descriptor handed to js/physics.js, rebuilt lazily: the bed changes with
 // the rule set, and POCKETS is rewritten in place rather than replaced.
@@ -103,6 +111,12 @@ function applyTableProfile(name) {
     { x: 0,        z: -PH - si, r: p.sideR },
     { x: 0,        z:  PH + si, r: p.sideR }
   );
+  CUSH_H = 0.045 * BALL_SCALE; CUSH_DEPTH = 0.052 * BALL_SCALE;
+  RAIL_W = 0.11 * BALL_SCALE; RAIL_H = 0.09 * BALL_SCALE;
+  RAIL_TOP = TABLE_Y + 0.005 + RAIL_H / 2;
+  HOLES.length = 0;
+  HOLES.push(...window.PoolPockets.circles(
+    { PH, R, SIDE_GAP, cushDepth: CUSH_DEPTH, POCKETS }));
   return true;
 }
 applyTableProfile('pool');            // 8-ball is the default game
@@ -246,6 +260,26 @@ function mat(color, opts) {
 function box(w, h, d, color, opts) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts));
   m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+// A flat plate lying in the XZ plane, built from a closed (x, z) outline and
+// any number of holes in it, with its top face at `top` and `thick` of material
+// hanging below. ExtrudeGeometry works in XY and pushes along +Z, so outlines
+// are authored as (x, z) and the result is tipped over; that mirrors z, which
+// is harmless — every outline the table uses is symmetric about z = 0.
+function plate(outline, holes, top, thick, material) {
+  const trace = (path, pts) => {
+    path.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
+    path.closePath();
+    return path;
+  };
+  const shape = trace(new THREE.Shape(), outline);
+  if (holes) for (const h of holes) shape.holes.push(trace(new THREE.Path(), h));
+  const g = new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: false });
+  g.rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(g, material);
+  m.position.y = top - thick;
   return m;
 }
 // Pick an ivory or charcoal sight-diamond color that reads against the rail.
@@ -475,9 +509,17 @@ function buildTable(C) {
   const frameMat = C.metal ? metalMat(C.frame) : mat(C.frame);
   const apronMat = C.metal ? metalMat(C.frameDark) : mat(C.frameDark);
 
-  // slate / felt bed
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(2 * PW + 0.06, 0.06, 2 * PH + 0.06), mat(C.felt));
-  bed.position.y = TABLE_Y - 0.03; bed.castShadow = bed.receiveShadow = true;
+  // Slate and cloth. The cloth reaches all the way back under the cushions to
+  // the rail, so wood and cloth meet along a single line, and both are cut to
+  // the visible pocket mouths (js/pockets.js) — so a pocket is a hole through
+  // the table rather than a dark disc painted on top of it. The two outlines
+  // share their crossing points exactly, which is what lets them butt together
+  // around each mouth with nothing overlapping and nothing to see through.
+  const PK = window.PoolPockets;
+  const OPEN_X = PW + CUSH_DEPTH, OPEN_Z = PH + CUSH_DEPTH;
+  const opening = PK.railOpening(OPEN_X, OPEN_Z, HOLES);
+  const bed = plate(PK.bedOutline(OPEN_X, OPEN_Z, HOLES), null, TABLE_Y, 0.06, mat(C.felt));
+  bed.castShadow = bed.receiveShadow = true;
   table.add(bed);
 
   // felt markings — the head and foot spots of a pool table. Snooker chalks a
@@ -492,57 +534,74 @@ function buildTable(C) {
     poolSpots.push(s);
   }
 
-  // cushions. Sized off the ball (BALL_SCALE), so the nose always sits at the
-  // same fraction of a ball's height whichever bed is up.
-  const cushH = 0.045 * BALL_SCALE, cushDepth = 0.052 * BALL_SCALE;
-  const cushCut = 0.035 * BALL_SCALE;
+  // Cushions. Sized off the ball (CUSH_*, all BALL_SCALE) so the nose sits at
+  // the same fraction of a ball's height whichever bed is up.
+  //
+  // Each end is a JAW: a 45° cut with its back corner sitting exactly on the
+  // pocket's rim, so the two cushions either side of a mouth funnel into the
+  // round hole the way a real table's do. The back edge is therefore not a
+  // fixed length — it runs to wherever the mouth circle crosses the line the
+  // back sits on (halfChord, js/pockets.js), and the nose is one cut shorter at
+  // each end. At a side pocket that back corner is the very point the mouth's
+  // circle was built through; at a corner it is the circle's chord on the
+  // cushion band, which leaves the nose within a hair of CORNER_GAP, the point
+  // the physics stops bouncing at. The funnel itself opens wider than the gap a
+  // ball can pass through — the physics rail is a hard edge at SIDE_GAP with no
+  // jaw face of its own — so a ball hugging a jaw bounces just short of the
+  // drawn face rather than off it, which reads as a clip off the jaw.
+  const JAW = CUSH_DEPTH;                     // a 45° jaw, as on the reference
+  const hc = PK.halfChord;
+  const cornerHole = HOLES[3], sideHole = HOLES[5];
+  const sideBack = hc(sideHole, 'z', OPEN_Z);                  // == SIDE_GAP
+  const cornerBackX = cornerHole.x - hc(cornerHole, 'z', OPEN_Z);
+  const cornerBackZ = cornerHole.z - hc(cornerHole, 'x', OPEN_X);
   const cushMat = mat(C.feltDark);
-  function cushion(len, cut) {
+  // A cushion in plan, back edge `len` long, jaws cut in at both ends. Authored
+  // with the back along y = 0 and extruded up; rotateX tips it so the back is
+  // at local z = 0 and the nose at z = -CUSH_DEPTH.
+  function cushion(len) {
     const half = len / 2;
     const s = new THREE.Shape();
     s.moveTo(-half, 0); s.lineTo(half, 0);
-    s.lineTo(half - cut, cushDepth); s.lineTo(-half + cut, cushDepth); s.closePath();
-    const g = new THREE.ExtrudeGeometry(s, { depth: cushH, bevelEnabled: false });
+    s.lineTo(half - JAW, CUSH_DEPTH); s.lineTo(-half + JAW, CUSH_DEPTH); s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth: CUSH_H, bevelEnabled: false });
     g.rotateX(-Math.PI / 2);
     const m = new THREE.Mesh(g, cushMat);
     m.castShadow = true; m.receiveShadow = true;
     return m;
   }
-  const longLen = PW - CORNER_GAP - SIDE_GAP;
-  const longCx = (PW - CORNER_GAP + SIDE_GAP) / 2;
+  const longLen = cornerBackX - sideBack;
+  const longCx = (cornerBackX + sideBack) / 2;
   for (const zs of [-1, 1]) for (const xs of [-1, 1]) {
-    const c = cushion(longLen, cushCut);
+    const c = cushion(longLen);
     if (zs < 0) c.rotation.y = Math.PI;
-    c.position.set(xs * longCx, TABLE_Y, zs * (PH + cushDepth));
+    c.position.set(xs * longCx, TABLE_Y, zs * OPEN_Z);
     table.add(c);
   }
-  const shortLen = 2 * (PH - CORNER_GAP);
   for (const xs of [-1, 1]) {
-    const c = cushion(shortLen, cushCut);
+    const c = cushion(2 * cornerBackZ);
     c.rotation.y = xs > 0 ? Math.PI / 2 : -Math.PI / 2;
-    c.position.set(xs * (PW + cushDepth), TABLE_Y, 0);
+    c.position.set(xs * OPEN_X, TABLE_Y, 0);
     table.add(c);
   }
 
-  // rail frame — also ball-scaled, so the rail top stays just under the top of
-  // a ball and never hides one from a low camera.
-  const railW = 0.11 * BALL_SCALE, railH = 0.09 * BALL_SCALE;
-  const frameX = PW + cushDepth + railW / 2;
-  const frameZ = PH + cushDepth + railW / 2;
-  for (const zs of [-1, 1]) {
-    const r = new THREE.Mesh(new THREE.BoxGeometry(2 * (PW + cushDepth + railW), railH, railW), frameMat);
-    r.position.set(0, TABLE_Y + 0.005, zs * frameZ); r.castShadow = r.receiveShadow = true; table.add(r);
-  }
-  for (const xs of [-1, 1]) {
-    const r = new THREE.Mesh(new THREE.BoxGeometry(railW, railH, 2 * (PH + cushDepth)), frameMat);
-    r.position.set(xs * frameX, TABLE_Y + 0.005, 0); r.castShadow = r.receiveShadow = true; table.add(r);
-  }
+  // Rail frame. One plate rather than four boxes, because the pockets have to
+  // be cut out of it: its inner edge is the cushion rectangle with each mouth
+  // biting outward into the wood. Ball-scaled like everything else, so the rail
+  // top stays just under the top of a ball and never hides one from a low
+  // camera, and the outer edge carries a radius the way a real table's does.
+  const rail = plate(PK.outerFrame(OPEN_X + RAIL_W, OPEN_Z + RAIL_W, RAIL_W * 0.85),
+                     [opening.path], RAIL_TOP, RAIL_H, frameMat);
+  rail.castShadow = rail.receiveShadow = true;
+  table.add(rail);
+  const frameX = OPEN_X + RAIL_W / 2; // rail centre lines, for the sight diamonds
+  const frameZ = OPEN_Z + RAIL_W / 2;
 
   // rail sight diamonds: three evenly spaced along every rail segment between
   // adjacent pockets — 6 per long rail (split by the side pocket), 3 per short.
   const diaGeo = new THREE.CircleGeometry(0.014 * BALL_SCALE, 4);
   const diaMat = mat(diamondColor(C.frame), { roughness: 0.5 });
-  const diaY = TABLE_Y + 0.005 + railH / 2 + 0.001;
+  const diaY = RAIL_TOP + 0.001;
   // `long` = the world axis the diamond is stretched along; we point it toward
   // the table (perpendicular to the rail it sits on).
   function diamond(x, z, long) {
@@ -557,20 +616,58 @@ function buildTable(C) {
   for (const xs of [-1, 1]) for (const f of [-0.5, 0, 0.5])
     diamond(xs * frameX, f * PH, 'x'); // short rails → point inward along x
 
-  // pockets (flush dark mouths + recess; polygonOffset avoids z-fighting).
-  // Each pocket gets its own material so the aim-assist can glow it green.
+  // Pocket throats. The wood and the cloth have already been cut to these
+  // circles, so all that is left to build is the well below — open at the top,
+  // so it reads as a hole you can see down into from any camera angle rather
+  // than a disc lying on the surface. It runs straight rather than tapering:
+  // the cut edges of the rail and the cloth are vertical walls at exactly the
+  // hole's radius, and a well that pulls away from them just puts a band of lit
+  // wood and a crescent of green baize inside the mouth of the pocket. The
+  // bottom stops just above the apron, which closes the well off underneath.
+  // Each pocket keeps its own material so the aim-assist can glow one green.
+  const throat = RAIL_TOP - (TABLE_Y - 0.055);
   pocketMats = [];
-  for (const p of POCKETS) {
+  for (const h of HOLES) {
     const pm = new THREE.MeshStandardMaterial({
       color: '#0a0a0f', emissive: '#000000', flatShading: true, roughness: 0.95, metalness: 0.0,
-      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      // The throat is only ever seen from the inside, and a cylinder's faces
+      // point outward — leave this at the default and the far wall is culled
+      // away, so you look clean through the pocket at the cut edge of the cloth
+      // behind it and the hole fills up with green.
+      side: THREE.DoubleSide,
     });
     pocketMats.push(pm);
-    const mouth = new THREE.Mesh(new THREE.CircleGeometry(p.r * 1.12, 18), pm);
-    mouth.rotation.x = -Math.PI / 2; mouth.position.set(p.x, TABLE_Y + 0.0015, p.z);
-    mouth.receiveShadow = true; table.add(mouth);
-    const cup = new THREE.Mesh(new THREE.CylinderGeometry(p.r * 1.05, p.r * 0.8, 0.08, 12), pm);
-    cup.position.set(p.x, TABLE_Y - 0.045, p.z); table.add(cup);
+    // A hair inside the cut, so the rail keeps a thin lip of visible wood at
+    // the rim rather than z-fighting with the throat wall.
+    const wall = new THREE.Mesh(
+      new THREE.CylinderGeometry(h.r * 0.995, h.r * 0.995, throat, 20, 1, true), pm);
+    wall.position.set(h.x, RAIL_TOP - throat / 2, h.z);
+    table.add(wall);
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(h.r * 0.995, 20), pm);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(h.x, TABLE_Y - 0.055, h.z);
+    table.add(floor);
+  }
+
+  // The polished rim of the pocket liner, set into the rail. It follows only
+  // the stretch of each circle that is actually in the wood: a side pocket's
+  // circle is tangent to the playing line, so a rim carried round onto the
+  // cloth side would have to spill over the cushion nose and lie on the felt.
+  // Same ivory-or-charcoal pick as the sight diamonds, which is the one colour
+  // guaranteed to read against this style's rail — the accent colour is the
+  // frame colour itself on some styles, and a rim in it would vanish.
+  const rimMat = C.metal ? metalMat(diamondColor(C.frame))
+                         : mat(diamondColor(C.frame), { roughness: 0.45, metalness: 0.3 });
+  for (const a of opening.arcs) {
+    // RingGeometry is authored in XY and tipped down with everything else,
+    // which reverses the sense of its angles: a world sweep starting at a0 runs
+    // from -(a0 + sweep) in the geometry's own frame.
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(a.r, a.r * 1.17, 28, 1, -a.a0 - a.sweep, a.sweep), rimMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(a.x, RAIL_TOP + 0.0015, a.z);
+    ring.receiveShadow = true;
+    table.add(ring);
   }
 
   // apron skirt
@@ -700,7 +797,7 @@ let ballGeo = new THREE.SphereGeometry(R, 14, 10);
 // material for each look — the numbered pool ball, or the plain snooker one —
 // because a mesh's texture can't depend on a rule set that's picked later;
 // rackBalls swaps them via applyBallLook().
-const balls = []; // {id, mesh, poolMat, snkMat, x, z, vx, vz, potted, sink}
+const balls = []; // {id, mesh, poolMat, snkMat, x, z, vx, vz, potted, sink, sinkFrom, sinkTo}
 
 for (let id = 0; id <= 21; id++) {
   // Snooker balls carry no number and no stripe, so they need no texture at
@@ -715,7 +812,8 @@ for (let id = 0; id <= 21; id++) {
   const m = new THREE.Mesh(ballGeo, poolMat || snkMat);
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m);
-  balls.push({ id, mesh: m, poolMat, snkMat, x: 0, z: 0, vx: 0, vz: 0, potted: false, sink: 0 });
+  balls.push({ id, mesh: m, poolMat, snkMat, x: 0, z: 0, vx: 0, vz: 0,
+               potted: false, sink: 0, sinkFrom: null, sinkTo: null });
 }
 const cue = balls[0];
 
@@ -906,15 +1004,57 @@ function spotClear(x, z, skipId) {
   return true;
 }
 
+// Start a ball's drop into a pocket.
+//
+// The capture circle the physics uses (POCKETS) is not the mouth you can see
+// (HOLES) — see js/pockets.js. A side pocket's visible mouth is tangent to the
+// playing line, so the core takes the ball off the table at the moment its
+// LEADING EDGE reaches the rim, a full radius before its centre gets there.
+// Freezing it on the spot and fading it out therefore blinks the ball away at
+// the lip, before it has visibly entered the pocket at all.
+//
+// So the animation covers that last stretch itself: the ball rolls on into the
+// middle of the mouth at full size, and only then drops away. `pi` is the
+// pocket the core reported; the online watcher is told a position and no index,
+// so it works out the nearest mouth instead.
+const SINK_T = 0.34;   // seconds for the roll-in and the drop together
+const SINK_ROLL = 0.35; // fraction of that spent rolling in before it falls
+function beginSink(b, pi) {
+  if (pi == null) {
+    let bd = Infinity;
+    for (let i = 0; i < HOLES.length; i++) {
+      const d = (b.x - HOLES[i].x) ** 2 + (b.z - HOLES[i].z) ** 2;
+      if (d < bd) { bd = d; pi = i; }
+    }
+  }
+  b.sink = SINK_T;
+  b.sinkFrom = { x: b.x, z: b.z };
+  // Copied, not held by reference: applyTableProfile rewrites HOLES in place.
+  b.sinkTo = { x: HOLES[pi].x, z: HOLES[pi].z };
+  b.mesh.position.set(b.x, BALL_Y, b.z);
+  b.mesh.scale.setScalar(1);
+}
+
 function syncBallMeshes(dt) {
   const axis = new THREE.Vector3();
   for (const b of balls) {
     if (b.potted) {
       if (b.sink > 0) {
         b.sink -= dt;
-        const t = Math.max(0, b.sink / 0.25);
-        b.mesh.position.y = BALL_Y - (1 - t) * 0.09;
-        b.mesh.scale.setScalar(Math.max(0.01, t));
+        const u = 1 - Math.max(0, b.sink) / SINK_T;   // 0 -> 1 over the drop
+        // Roll in: quick off the rim, easing as it reaches the middle.
+        const roll = 1 - (1 - u) * (1 - u);
+        // Fall: held back until the ball is actually over the hole, then away.
+        const fall = Math.max(0, (u - SINK_ROLL) / (1 - SINK_ROLL));
+        const f = b.sinkFrom, to = b.sinkTo;
+        b.mesh.position.set(
+          f.x + (to.x - f.x) * roll,
+          BALL_Y - fall * fall * 0.13,
+          f.z + (to.z - f.z) * roll
+        );
+        // Squared, so it keeps its size through the roll-in and most of the
+        // fall and only shrinks out of sight down in the throat.
+        b.mesh.scale.setScalar(Math.max(0.01, 1 - fall * fall));
         if (b.sink <= 0) b.mesh.visible = false;
       }
       continue;
@@ -971,8 +1111,7 @@ function physicsStep(h) {
     if (e.type === 'cushion') { sfx.cushion(e.speed); continue; }
     if (e.type === 'clack') { sfx.clack(e.speed); continue; }
     const b = balls[e.id];
-    b.sink = 0.25;
-    b.mesh.position.set(b.x, BALL_Y, b.z);
+    beginSink(b, e.pocket);
     // Which pocket the 8 found, for 8-ball's called-shot check. That's a rules
     // question, so the core just reports the pocket and this decides it means.
     if (e.id === 8) shotEvents.eightPocket = e.pocket;
@@ -1406,8 +1545,11 @@ function isOnEight(seat) {
 function setCalledPocket(i) {
   calledPocket = i;
   if (i >= 0) {
-    const p = POCKETS[i];
-    callMarker.position.set(p.x, TABLE_Y + 0.02, p.z);
+    // On the mouth you can see, not the capture cup — they are different
+    // circles (js/pockets.js), and this marker is purely something to look at.
+    const h = HOLES[i];
+    callMarker.position.set(h.x, TABLE_Y + 0.02, h.z);
+    callMarker.scale.setScalar(h.r / 0.066);
     callMarker.visible = true;
   } else {
     callMarker.visible = false;
@@ -2375,8 +2517,9 @@ function applySnap(msg) {
 function applyPot(msg) {
   const b = balls[msg.id];
   if (!b || b.potted) return;
-  if (msg.x != null) { b.x = msg.x; b.z = msg.z; b.mesh.position.set(b.x, BALL_Y, b.z); }
-  b.potted = true; b.sink = 0.25; b.vx = b.vz = 0;
+  if (msg.x != null) { b.x = msg.x; b.z = msg.z; }
+  b.potted = true; b.vx = b.vz = 0;
+  beginSink(b);   // no pocket index on the wire; nearest mouth to where it stopped
   sfx.pocket();
   announcePot(msg.id);
 }
@@ -3130,14 +3273,23 @@ function frame(now) {
     if (watching() && state === S.ROLLING) interpSample();
   }
 
-  // camera focus
-  if (state === S.AIM || state === S.CHARGE) {
-    cam.goal.set(cue.x, BALL_Y, cue.z);
-  } else if (state === S.SETUP) {
-    cam.goal.set(0, TABLE_Y + 0.15, 0);
-    cam.yaw += dt * 0.12; // slow showcase spin
-  } else {
-    cam.goal.set(0, TABLE_Y, 0);
+  // Camera focus — chosen between shots only. While the state is ROLLING, or
+  // anything is still rolling at all, the goal is left alone, and that is what
+  // holds the view still: cam.goal is a copied position rather than a live
+  // reference, so not touching it keeps the camera exactly where the stroke
+  // found it. Picking a new goal here fired the moment the cue was struck, so
+  // the view slid away through the whole shot — the one part of a turn worth
+  // watching was the part that moved under you. The next state sets a fresh
+  // goal, so the camera only ever travels once the table is still again.
+  if (state !== S.ROLLING && !moving) {
+    if (state === S.AIM || state === S.CHARGE) {
+      cam.goal.set(cue.x, BALL_Y, cue.z);
+    } else if (state === S.SETUP) {
+      cam.goal.set(0, TABLE_Y + 0.15, 0);
+      cam.yaw += dt * 0.12; // slow showcase spin
+    } else {
+      cam.goal.set(0, TABLE_Y, 0);
+    }
   }
   updateCamera();
 
